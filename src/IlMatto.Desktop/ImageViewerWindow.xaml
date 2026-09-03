@@ -1,0 +1,70 @@
+<Window x:Class="IlMatto.Desktop.ImageViewerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="图片查看器"
+        Width="1000"
+        Height="760"
+        MinWidth="240"
+        MinHeight="180"
+        Background="#20242B"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="True"
+        WindowStartupLocation="CenterOwner">
+  <Grid>
+    <ScrollViewer x:Name="ImageScrollViewer"
+                  HorizontalScrollBarVisibility="Auto"
+                  VerticalScrollBarVisibility="Auto"
+                  CanContentScroll="False"
+                  Background="#20242B"
+                  Padding="18"
+                  PreviewMouseWheel="ImageScrollViewer_OnPreviewMouseWheel">
+      <Image x:Name="ImagePreview"
+             Stretch="None"
+             HorizontalAlignment="Left"
+             VerticalAlignment="Top"
+             RenderTransformOrigin="0,0"/>
+    </ScrollViewer>
+
+    <Border HorizontalAlignment="Left"
+            VerticalAlignment="Top"
+            Background="#CC11151B"
+            CornerRadius="5"
+            Padding="10,6"
+            Margin="14"
+            Cursor="SizeAll"
+            MouseLeftButtonDown="ViewerHeader_OnMouseLeftButtonDown">
+      <TextBlock x:Name="ImageNameText"
+                 Foreground="#F4F6F8"
+                 FontSize="12"
+                 TextTrimming="CharacterEllipsis"
+                 MaxWidth="620"/>
+    </Border>
+
+    <Button Content="×"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            Width="38"
+            Height="38"
+            Margin="10"
+            Background="#CC11151B"
+            Foreground="White"
+            BorderThickness="0"
+            FontSize="24"
+            Cursor="Hand"
+            Click="CloseButton_OnClick"
+            ToolTip="关闭"/>
+
+    <Border HorizontalAlignment="Center"
+            VerticalAlignment="Bottom"
+            Background="#CC11151B"
+            CornerRadius="5"
+            Padding="10,5"
+            Margin="10">
+      <TextBlock x:Name="ZoomText"
+                 Text="100% · 滚轮缩放"
+                 Foreground="#DCE2E8"
+                 FontSize="12"/>
+    </Border>
+  </Grid>
+</Window>

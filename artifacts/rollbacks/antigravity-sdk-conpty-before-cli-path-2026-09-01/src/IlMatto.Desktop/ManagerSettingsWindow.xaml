@@ -1,0 +1,138 @@
+<Window x:Class="IlMatto.Desktop.ManagerSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设置 · IlMatto Manager" Width="760" Height="700" MinWidth="650" MinHeight="560" WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <StackPanel Grid.Row="0" Margin="0,0,0,18">
+      <TextBlock Text="Manager 设置" FontSize="25" FontWeight="SemiBold"/>
+      <TextBlock Text="为新对话选择主 Agent、陪伴设定与 Coding Agent；已有对话继续使用创建时的完整配置" Foreground="#64748B" Margin="0,5,0,0"/>
+    </StackPanel>
+    <TabControl Grid.Row="1" BorderThickness="0">
+      <TabItem Header="主 Agent">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="6,18,12,12">
+            <TextBlock Text="新对话默认主 Agent" FontWeight="SemiBold"/>
+            <ComboBox x:Name="MainProviderBox" Margin="0,6,0,16">
+              <ComboBoxItem Content="Antigravity CLI（新会话）" Tag="antigravity"/>
+              <ComboBoxItem Content="OpenAI-compatible API" Tag="openai_compatible"/>
+            </ComboBox>
+            <GroupBox Header="Antigravity CLI（新会话） / SDK 会话兼容" Padding="12" Margin="0,0,0,14">
+              <StackPanel>
+                <TextBlock Text="新建对话默认使用本机已登录的 Antigravity CLI；SDK 会话仍可兼容恢复。CLI 路径、模型刷新和登录终端用于图片交互与诊断，不在这里保存 API Key。" Foreground="#31567C" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                <TextBlock Text="Antigravity CLI 路径" FontWeight="SemiBold"/>
+                <TextBox x:Name="AgyPathBox" Margin="0,6,0,12"/>
+                <TextBlock Text="模型（CLI 与 SDK 共用；留空使用默认模型）" FontWeight="SemiBold"/>
+                <Grid Margin="0,6,0,12">
+                  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <ComboBox x:Name="AgyModelBox" IsEditable="True" IsTextSearchEnabled="True"/>
+                  <Button Grid.Column="1" Content="刷新 CLI 模型" Click="RefreshModelsButton_OnClick"/>
+                </Grid>
+                <TextBlock x:Name="AgyStatusText" Foreground="#64748B" FontSize="12" Margin="0,-6,0,10"/>
+                <TextBlock Text="推理强度" FontWeight="SemiBold"/>
+                <ComboBox x:Name="AgyEffortBox" Margin="0,6,0,12">
+                  <ComboBoxItem Content="low"/><ComboBoxItem Content="medium"/><ComboBoxItem Content="high"/>
+                </ComboBox>
+                <TextBlock Text="协调超时（秒）" FontWeight="SemiBold"/>
+                <TextBox x:Name="AgyTimeoutBox" Margin="0,6,0,12"/>
+                <Button Content="打开 CLI 登录终端" Click="AgyLoginButton_OnClick" HorizontalAlignment="Left"/>
+              </StackPanel>
+            </GroupBox>
+            <GroupBox Header="OpenAI-compatible 主 Agent" Padding="12">
+              <StackPanel>
+                <TextBlock Text="Base URL" FontWeight="SemiBold"/>
+                <TextBox x:Name="MainApiBaseUrlBox" Margin="0,6,0,12"/>
+                <TextBlock Text="模型 ID" FontWeight="SemiBold"/>
+                <TextBox x:Name="MainApiModelIdBox" Margin="0,6,0,12"/>
+                <TextBlock Text="API Key" FontWeight="SemiBold"/>
+                <PasswordBox x:Name="MainApiKeyBox" Margin="0,6,0,12"/>
+                <TextBlock Text="协调超时（秒）" FontWeight="SemiBold"/>
+                <TextBox x:Name="MainApiTimeoutBox" Margin="0,6,0,10"/>
+                <TextBlock Text="API 主 Agent 不获得工作区、代码、Diff 或工具，只能回答普通问题、澄清或委派。" Foreground="#31567C" TextWrapping="Wrap"/>
+              </StackPanel>
+            </GroupBox>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+      <TabItem Header="Coding Agent">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="6,18,12,12">
+            <TextBlock Text="新对话默认 Coding Agent" FontWeight="SemiBold"/>
+            <ComboBox x:Name="CodingProviderBox" Margin="0,6,0,16">
+              <ComboBoxItem Content="Pi Coding Agent" Tag="pi"/>
+              <ComboBoxItem Content="Codex CLI App Server" Tag="codex"/>
+            </ComboBox>
+            <GroupBox Header="Pi Coding Agent" Padding="12" Margin="0,0,0,14">
+              <StackPanel>
+                <TextBlock Text="Base URL" FontWeight="SemiBold"/>
+                <TextBox x:Name="PiBaseUrlBox" Margin="0,6,0,12"/>
+                <TextBlock Text="模型 ID" FontWeight="SemiBold"/>
+                <TextBox x:Name="PiModelIdBox" Margin="0,6,0,12"/>
+                <TextBlock Text="API Key" FontWeight="SemiBold"/>
+                <PasswordBox x:Name="PiApiKeyBox" Margin="0,6,0,4"/>
+              </StackPanel>
+            </GroupBox>
+            <GroupBox Header="Codex CLI App Server" Padding="12">
+              <StackPanel>
+                <TextBlock Text="Codex CLI 路径" FontWeight="SemiBold"/>
+                <TextBox x:Name="CodexPathBox" Margin="0,6,0,12"/>
+                <TextBlock Text="模型（留空使用 Codex 默认模型）" FontWeight="SemiBold"/>
+                <ComboBox x:Name="CodexModelBox" IsEditable="True" IsTextSearchEnabled="True" SelectionChanged="CodexModelBox_OnSelectionChanged" Margin="0,6,0,12"/>
+                <TextBlock Text="Reasoning effort" FontWeight="SemiBold"/>
+                <ComboBox x:Name="CodexEffortBox" Margin="0,6,0,12">
+                  <ComboBoxItem Content="low"/><ComboBoxItem Content="medium"/><ComboBoxItem Content="high"/><ComboBoxItem Content="xhigh"/><ComboBoxItem Content="max"/><ComboBoxItem Content="ultra"/>
+                </ComboBox>
+                <StackPanel Orientation="Horizontal">
+                  <Button Content="检查 Codex 状态" Click="RefreshCodexButton_OnClick"/>
+                  <Button Content="登录 Codex" Click="CodexLoginButton_OnClick"/>
+                </StackPanel>
+                <TextBlock x:Name="CodexStatusText" Foreground="#64748B" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,0"/>
+                <TextBox x:Name="CodexPolicyText" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MaxHeight="90" FontFamily="Consolas" FontSize="10" Margin="0,8,0,0" ToolTip="configRequirements/read 返回的有效策略"/>
+                <Border Background="#FFF7DF" BorderBrush="#E8C35A" BorderThickness="1" CornerRadius="7" Padding="10" Margin="0,12,0,0">
+                  <TextBlock Text="Codex 继承本机配置、AGENTS.md、技能、插件、MCP 和网络策略。IlMatto 会优先使用 unlessTrusted；旧版 App Server 会自动兼容为 untrusted。其有效权限可能比 Pi 更宽。" TextWrapping="Wrap" Foreground="#805B12"/>
+                </Border>
+              </StackPanel>
+            </GroupBox>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+      <TabItem Header="陪伴设定">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="6,18,12,12">
+            <TextBlock Text="陪伴 Agent 默认资料" FontWeight="SemiBold"/>
+            <TextBlock Text="这些资料会复制到新对话；修改后不会改变已有对话。不要在这里填写 API Key 或其他凭据。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,5,0,16"/>
+            <TextBlock Text="角色设定" FontWeight="SemiBold"/>
+            <TextBox x:Name="CompanionCharacterPromptBox" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MinHeight="120" MaxHeight="210" MaxLength="8000" Margin="0,6,0,14"/>
+            <TextBlock Text="用户资料" FontWeight="SemiBold"/>
+            <TextBox x:Name="CompanionUserProfileBox" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MinHeight="100" MaxHeight="180" MaxLength="8000" Margin="0,6,0,14"/>
+            <TextBlock Text="关系摘要" FontWeight="SemiBold"/>
+            <TextBox x:Name="CompanionRelationshipSummaryBox" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MinHeight="100" MaxHeight="180" MaxLength="8000" Margin="0,6,0,10"/>
+            <TextBlock Text="v1 使用手动资料和一段摘要，不会自动提取记忆、计算好感度或主动发起话题。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,4,0,0"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+      <TabItem Header="工作区与安全">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="6,18,12,12">
+            <TextBlock Text="新对话工作区" FontWeight="SemiBold"/>
+            <Grid Margin="0,6,0,16">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+              <TextBox x:Name="WorkspaceBox"/>
+              <Button Grid.Column="1" Content="浏览" Click="BrowseButton_OnClick"/>
+            </Grid>
+            <CheckBox x:Name="SafeCommandsBox" Content="Pi：自动批准安全命令" Margin="0,3"/>
+            <CheckBox x:Name="GitOperationsBox" Content="Pi：自动执行本地 Git 操作" Margin="0,6,0,0"/>
+            <TextBlock Text="这些自动批准选项只适用于 Pi；Codex 使用其原生审批与本机策略，IlMatto 会自动兼容不同版本的审批枚举。所有 API Key 只保存在 Windows 凭据管理器。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,14,0,0"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+      <Button Content="取消" Click="CancelButton_OnClick" MinWidth="84"/>
+      <Button Content="保存为新对话默认值" Click="SaveButton_OnClick" MinWidth="160" Background="#2563EB" Foreground="White"/>
+    </StackPanel>
+  </Grid>
+</Window>

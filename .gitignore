@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+src/IlMatto.AgentHost/node_modules/
+src/IlMatto.AgentHost/dist/
+src/IlMatto.Desktop/artifacts/
+.vs/
+.idea/
+*.user
+*.suo
+.nuget-scratch/
+.nuget-packages/

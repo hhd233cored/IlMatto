@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>IlMatto.Desktop</AssemblyName>
+    <RootNamespace>IlMatto.Desktop</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\IlMatto.AgentHost\dist\**" Link="AgentHost\dist\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\IlMatto.AgentHost\dist')" />
+    <None Include="..\IlMatto.AgentHost\package.json" Link="AgentHost\package.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\IlMatto.ManagerHost\dist\**" Link="ManagerHost\dist\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\IlMatto.ManagerHost\dist')" />
+    <None Include="..\IlMatto.ManagerHost\package.json" Link="ManagerHost\package.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\IlMatto.AntigravityBridge\bridge.py;..\IlMatto.AntigravityBridge\requirements.txt;..\IlMatto.AntigravityBridge\README.md" Link="AntigravityBridge\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\IlMatto.AntigravityBridge')" />
+    <None Include="..\IlMatto.AntigravityBridge\runtime\**" Link="AntigravityBridge\python\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\IlMatto.AntigravityBridge\runtime')" />
+  </ItemGroup>
+</Project>

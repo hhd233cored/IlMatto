@@ -1,0 +1,61 @@
+<Window x:Class="IlMatto.Desktop.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设置 · IlMatto" Width="620" Height="500" MinWidth="560" MinHeight="420"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <StackPanel Grid.Row="0" Margin="0,0,0,20">
+      <TextBlock Text="设置" FontSize="26" FontWeight="SemiBold" />
+      <TextBlock Text="配置模型连接和当前编码工作区" Foreground="#6B7280" Margin="0,5,0,0" />
+    </StackPanel>
+    <TabControl Grid.Row="1" BorderThickness="0">
+      <TabItem Header="LLM">
+        <Grid Margin="4,18,4,4">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+          <TextBlock Grid.Row="0" Text="Base URL" FontWeight="SemiBold" />
+          <TextBox Grid.Row="1" Text="{Binding BaseUrl, UpdateSourceTrigger=PropertyChanged}" Margin="0,7,0,16" ToolTip="Gemini OpenAI 兼容端点：https://generativelanguage.googleapis.com/v1beta/openai（不要填写 /chat/completions）" />
+          <TextBlock Grid.Row="2" Text="模型 ID" FontWeight="SemiBold" />
+          <TextBox Grid.Row="3" Text="{Binding ModelId, UpdateSourceTrigger=PropertyChanged}" Margin="0,7,0,16" VerticalAlignment="Top" />
+          <TextBlock Grid.Row="4" Text="API Key" FontWeight="SemiBold" />
+          <PasswordBox Grid.Row="5" x:Name="ApiKeyBox" PasswordChanged="ApiKeyBox_OnPasswordChanged" Margin="0,7,0,0" />
+          <TextBlock Grid.Row="6" Text="密钥仅保存在当前 Windows 用户的凭据管理器中。" Foreground="#6B7280" FontSize="12" Margin="0,7,0,0" />
+        </Grid>
+      </TabItem>
+      <TabItem Header="工作区">
+        <Grid Margin="4,18,4,4">
+          <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+          <TextBlock Grid.Row="0" Text="当前编码工作区" FontWeight="SemiBold" />
+          <Grid Grid.Row="1" Margin="0,7,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <TextBox Grid.Column="0" Text="{Binding WorkspacePath, UpdateSourceTrigger=PropertyChanged}" />
+            <Button Grid.Column="1" Content="浏览" Command="{Binding BrowseWorkspaceCommand}" Margin="8,0,0,0" />
+          </Grid>
+          <TextBlock Grid.Row="2" Text="Agent 的文件读取、搜索、补丁和命令都会限制在这个目录内。" Foreground="#6B7280" FontSize="12" Margin="0,12,0,0" />
+        </Grid>
+      </TabItem>
+      <TabItem Header="安全">
+        <StackPanel Margin="4,18,4,4">
+          <TextBlock Text="工具审批" FontWeight="SemiBold" FontSize="15" />
+          <CheckBox Content="自动批准安全命令" IsChecked="{Binding AutoApproveSafeCommands, Mode=TwoWay}" Margin="0,14,0,0" />
+          <CheckBox Content="自动执行本地 Git 操作" IsChecked="{Binding AutoApproveGitOperations, Mode=TwoWay}" Margin="0,12,0,0" />
+          <TextBlock Text="开启后，Agent 可直接暂存或取消暂存文件、创建或切换本地分支、创建本地提交。不会执行远端同步、重置、还原、合并或变基。" Foreground="#7C5A00" FontSize="12" TextWrapping="Wrap" Margin="24,6,0,0" />
+          <TextBlock Text="开启后，只读检查以及常见的构建/测试命令会自动执行；文件写入、删除、网络访问和其他高风险命令仍会逐次询问。Git 写操作由下方独立开关控制。" Foreground="#6B7280" FontSize="12" TextWrapping="Wrap" Margin="24,6,0,0" />
+          <Border Background="#FFF7DF" BorderBrush="#E8C35A" BorderThickness="1" CornerRadius="7" Padding="10" Margin="0,18,0,0">
+            <TextBlock Text="自动批准只适用于当前 IlMatto 会话配置，仍建议在不熟悉的项目中关闭。" Foreground="#7C5A00" TextWrapping="Wrap" />
+          </Border>
+        </StackPanel>
+      </TabItem>
+    </TabControl>
+    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+      <Button Content="取消" Command="{Binding CancelCommand}" MinWidth="84" />
+      <Button Content="保存设置" Command="{Binding SaveCommand}" MinWidth="100" Background="#2563EB" Foreground="White" />
+    </StackPanel>
+  </Grid>
+</Window>
