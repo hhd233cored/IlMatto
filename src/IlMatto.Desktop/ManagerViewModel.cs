@@ -267,14 +267,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty] private string selectedTaskExecutor = "default";
     [ObservableProperty] private string interactionResponseText = "";
     [ObservableProperty] private bool isBusy;
-    /// <summary>Runtime-only visual throttle for the native chat timeline.</summary>
-    [ObservableProperty] private bool isFastChatScrolling;
-    /// <summary>
-    /// Separates the white fast-scroll cover from Markdown construction. The
-    /// cover remains up while the view restores only the visible documents,
-    /// rather than releasing every deferred FlowDocument at once.
-    /// </summary>
-    [ObservableProperty] private bool isChatMarkdownRenderingDeferred;
     [ObservableProperty] private string managerStatus = "准备就绪";
     [ObservableProperty] private bool mainProviderAvailable;
     [ObservableProperty] private bool mainProviderAuthenticated;

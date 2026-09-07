@@ -50,7 +50,7 @@
         <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.38"/></Trigger>
       </Style.Triggers>
     </Style>
-    <Style x:Key="ChatHistoryList" TargetType="local:ChatTimelineListBox">
+    <Style x:Key="ChatHistoryList" TargetType="ListBox">
       <Setter Property="Background" Value="Transparent"/>
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="Padding" Value="28,28,28,18"/>
@@ -66,18 +66,18 @@
       <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
       <Setter Property="ItemsPanel">
         <Setter.Value>
-          <ItemsPanelTemplate><local:AnchoredVirtualizingStackPanel/></ItemsPanelTemplate>
+          <ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate>
         </Setter.Value>
       </Setter>
     </Style>
-    <Style x:Key="ChatHistoryItem" TargetType="local:ChatTimelineListBoxItem">
+    <Style x:Key="ChatHistoryItem" TargetType="ListBoxItem">
       <Setter Property="Padding" Value="0"/>
       <Setter Property="Margin" Value="0"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
       <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
       <Setter Property="Template">
         <Setter.Value>
-          <ControlTemplate TargetType="local:ChatTimelineListBoxItem">
+          <ControlTemplate TargetType="ListBoxItem">
             <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
           </ControlTemplate>
         </Setter.Value>
@@ -442,8 +442,8 @@
     </Border>
 
     <Grid Grid.Column="1" Grid.Row="1" Background="#F5F6F8">
-      <local:ChatTimelineListBox x:Name="ManagerChatList" ItemsSource="{Binding ChatEntries}" Style="{StaticResource ChatHistoryList}" ItemContainerStyle="{StaticResource ChatHistoryItem}" HorizontalContentAlignment="Stretch" IsFastScrolling="{Binding IsFastChatScrolling}" Loaded="ManagerChatList_OnLoaded">
-          <local:ChatTimelineListBox.ItemTemplate>
+      <ListBox x:Name="ManagerChatList" ItemsSource="{Binding ChatEntries}" Style="{StaticResource ChatHistoryList}" ItemContainerStyle="{StaticResource ChatHistoryItem}" HorizontalContentAlignment="Stretch" Loaded="ManagerChatList_OnLoaded">
+          <ListBox.ItemTemplate>
             <DataTemplate>
               <Grid Margin="0,0,0,20" HorizontalAlignment="Stretch">
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
@@ -539,7 +539,7 @@
                       </ItemsControl.ItemsPanel>
                       <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                          <local:DeferredImage ImagePath="{Binding Path}" DeferLoading="{Binding DataContext.IsFastChatScrolling, Source={x:Reference RootWindow}}" Width="180" Height="140" Stretch="Uniform" Margin="0,0,8,8" Cursor="Hand" MouseLeftButtonUp="Image_OnMouseLeftButtonUp" ToolTip="点击查看原图：{Binding DisplayName}"/>
+                          <local:DeferredImage ImagePath="{Binding Path}" Width="180" Height="140" Stretch="Uniform" Margin="0,0,8,8" Cursor="Hand" MouseLeftButtonUp="Image_OnMouseLeftButtonUp" ToolTip="点击查看原图：{Binding DisplayName}"/>
                         </DataTemplate>
                       </ItemsControl.ItemTemplate>
                     </ItemsControl>
@@ -572,7 +572,7 @@
                                   </Style>
                                 </TextBlock.Style>
                               </TextBlock>
-                              <local:MarkdownViewer DeferMarkdownRender="{Binding DataContext.IsChatMarkdownRenderingDeferred, Source={x:Reference RootWindow}}" DeferWhileStreaming="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Markdown="{Binding Text}" Foreground="#172033" FontSize="14" HorizontalAlignment="Left" Margin="0,0,0,5">
+                              <local:MarkdownViewer DeferWhileStreaming="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Markdown="{Binding Text}" Foreground="#172033" FontSize="14" HorizontalAlignment="Left" Margin="0,0,0,5">
                                 <local:MarkdownViewer.Style>
                                   <Style TargetType="local:MarkdownViewer">
                                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -599,7 +599,7 @@
                                   </Grid>
                                 </Expander.Header>
                                 <StackPanel Margin="0,4,0,4">
-                                  <local:MarkdownViewer DeferMarkdownRender="{Binding DataContext.IsChatMarkdownRenderingDeferred, Source={x:Reference RootWindow}}" Markdown="{Binding LatestOperation.Details}" Foreground="#64748B" FontSize="12" MaxWidth="690" HorizontalAlignment="Left" Margin="0,0,0,4">
+                                  <local:MarkdownViewer Markdown="{Binding LatestOperation.Details}" Foreground="#64748B" FontSize="12" MaxWidth="690" HorizontalAlignment="Left" Margin="0,0,0,4">
                                     <local:MarkdownViewer.Style>
                                       <Style TargetType="local:MarkdownViewer">
                                         <Setter Property="Visibility" Value="Collapsed"/>
@@ -633,7 +633,7 @@
                                             </Grid>
                                           </Expander.Header>
                                           <Grid Margin="0,4,0,4">
-                                            <local:MarkdownViewer DeferMarkdownRender="{Binding DataContext.IsChatMarkdownRenderingDeferred, Source={x:Reference RootWindow}}" Markdown="{Binding Details}" Foreground="#64748B" FontSize="12" MaxWidth="690" HorizontalAlignment="Left">
+                                            <local:MarkdownViewer Markdown="{Binding Details}" Foreground="#64748B" FontSize="12" MaxWidth="690" HorizontalAlignment="Left">
                                               <local:MarkdownViewer.Style>
                                                 <Style TargetType="local:MarkdownViewer">
                                                   <Setter Property="Visibility" Value="Collapsed"/>
@@ -685,9 +685,8 @@
                 </Grid>
               </Grid>
             </DataTemplate>
-          </local:ChatTimelineListBox.ItemTemplate>
-      </local:ChatTimelineListBox>
-      <Border Background="#F5F6F8" Margin="0,0,20,0" Panel.ZIndex="10" IsHitTestVisible="False" Visibility="{Binding IsFastChatScrolling, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+          </ListBox.ItemTemplate>
+      </ListBox>
     </Grid>
 
     <Border Grid.Column="1" Grid.Row="2" Background="#FFFFFF" BorderBrush="#E0E3E8" BorderThickness="0,1,0,0" Padding="24,12,24,18">

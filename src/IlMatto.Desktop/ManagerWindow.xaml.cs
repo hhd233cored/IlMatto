@@ -1,19 +1,13 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using EmojiDataModel = Emoji.Wpf.EmojiData;
 using EmojiTextBlock = Emoji.Wpf.TextBlock;
 using IlMatto.Desktop.Models;
-using IlMatto.Desktop.Controls;
 using WpfButton = System.Windows.Controls.Button;
-using WpfPoint = System.Windows.Point;
-using WpfScrollBar = System.Windows.Controls.Primitives.ScrollBar;
-using WpfOrientation = System.Windows.Controls.Orientation;
 
 namespace IlMatto.Desktop;
 
@@ -29,25 +23,10 @@ public partial class ManagerWindow : Window
     private bool _emojiPickerInitializing;
     private StackPanel? _recentEmojiSection;
     private ScrollViewer? _managerChatScrollViewer;
-    private readonly DispatcherTimer _fastScrollSettleTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
-    private readonly Stopwatch _scrollStopwatch = Stopwatch.StartNew();
-    private long _lastScrollTimestamp;
-    private readonly ChatRenderRecoveryScheduler _chatRenderRecoveryScheduler;
-    private Thumb? _chatScrollThumb;
-    private ChatScrollMode _chatScrollMode;
-
-    private enum ChatScrollMode
-    {
-        Idle,
-        WheelFast,
-        ThumbDrag,
-        Settling,
-    }
 
     public ManagerWindow()
     {
         InitializeComponent();
-        _chatRenderRecoveryScheduler = new ChatRenderRecoveryScheduler(Dispatcher);
         var viewModel = new ManagerViewModel();
         DataContext = viewModel;
         viewModel.PropertyChanged += ViewModelOnPropertyChanged;
@@ -56,8 +35,6 @@ public partial class ManagerWindow : Window
         viewModel.UserMessageSent += UserMessageSent;
         SourceInitialized += (_, _) => FitWindowToWorkArea();
         _followTimer.Tick += (_, _) => { if (DataContext is ManagerViewModel { IsBusy: true } && _followTail) GetChatScrollViewer()?.ScrollToEnd(); else _followTimer.Stop(); };
-        _fastScrollSettleTimer.Tick += (_, _) => BeginChatRenderRecovery();
-        Closed += (_, _) => { _fastScrollSettleTimer.Stop(); _chatRenderRecoveryScheduler.Dispose(); ResetChatScrollPipeline(); };
         Loaded += async (_, _) => { await viewModel.InitializeAsync(); await Dispatcher.InvokeAsync(() => GetChatScrollViewer()?.ScrollToEnd(), DispatcherPriority.Background); };
     }
 
@@ -129,7 +106,6 @@ public partial class ManagerWindow : Window
             if (sender is ManagerViewModel { IsBusy: true }) { _followTimer.Start(); if (_followTail) GetChatScrollViewer()?.ScrollToEnd(); }
             else _followTimer.Stop();
         }
-        if (e.PropertyName == nameof(ManagerViewModel.SelectedConversation)) ResetChatScrollPipeline();
         if (e.PropertyName is nameof(ManagerViewModel.ChatEntries) or nameof(ManagerViewModel.SelectedConversation))
             Dispatcher.BeginInvoke(() => GetChatScrollViewer()?.ScrollToEnd(), DispatcherPriority.Background);
     }
@@ -144,46 +120,9 @@ public partial class ManagerWindow : Window
     {
         if (sender is not ScrollViewer scroll) return;
         var atBottom = e.ExtentHeight <= e.ViewportHeight || e.VerticalOffset >= e.ExtentHeight - e.ViewportHeight - 8;
-        if (Math.Abs(e.VerticalChange) > 0 && e.ExtentHeightChange == 0)
-        {
-            _followTail = atBottom;
-            if (_chatScrollMode != ChatScrollMode.ThumbDrag && !(_followTail && DataContext is ManagerViewModel { IsBusy: true }))
-                ObserveChatScrollVelocity(e.VerticalChange);
-        }
-        if (DataContext is ManagerViewModel { IsBusy: true } && _followTail && _chatScrollMode == ChatScrollMode.Idle && e.ExtentHeightChange > 0)
+        if (Math.Abs(e.VerticalChange) > 0 && e.ExtentHeightChange == 0) _followTail = atBottom;
+        if (DataContext is ManagerViewModel { IsBusy: true } && _followTail && e.ExtentHeightChange > 0)
             Dispatcher.BeginInvoke(() => scroll.ScrollToEnd(), DispatcherPriority.Background);
-    }
-
-    private void ObserveChatScrollVelocity(double verticalChange)
-    {
-        var now = _scrollStopwatch.ElapsedMilliseconds;
-        var elapsed = Math.Max(1, now - _lastScrollTimestamp);
-        _lastScrollTimestamp = now;
-        var velocity = Math.Abs(verticalChange) / elapsed;
-        if (Math.Abs(verticalChange) >= 160 || velocity >= 1.2)
-        {
-            EnterFastChatScrolling(ChatScrollMode.WheelFast);
-            RestartFastScrollSettleTimer();
-        }
-        else if (_chatScrollMode == ChatScrollMode.WheelFast)
-        {
-            // Keep the height reservation alive for a brief quiet period. A
-            // low-speed event immediately after a fling is not proof that all
-            // FlowDocuments have settled.
-            RestartFastScrollSettleTimer();
-        }
-    }
-
-    private void EnterFastChatScrolling(ChatScrollMode mode)
-    {
-        _chatRenderRecoveryScheduler.Cancel();
-        FreezeRealizedMarkdown();
-        _chatScrollMode = mode;
-        if (DataContext is ManagerViewModel viewModel)
-        {
-            viewModel.IsChatMarkdownRenderingDeferred = true;
-            viewModel.IsFastChatScrolling = true;
-        }
     }
 
     private void ManagerChatList_OnLoaded(object sender, RoutedEventArgs e)
@@ -192,115 +131,9 @@ public partial class ManagerWindow : Window
         _managerChatScrollViewer = FindVisualChild<ScrollViewer>(ManagerChatList);
         if (_managerChatScrollViewer is null) return;
         _managerChatScrollViewer.ScrollChanged += ManagerChatScrollViewer_OnScrollChanged;
-        AttachThumbDragEvents(_managerChatScrollViewer);
     }
 
     private ScrollViewer? GetChatScrollViewer() => _managerChatScrollViewer ??= FindVisualChild<ScrollViewer>(ManagerChatList);
-
-    private void AttachThumbDragEvents(ScrollViewer scrollViewer)
-    {
-        if (_chatScrollThumb is not null) return;
-        var verticalBar = FindVisualChildren<WpfScrollBar>(scrollViewer).FirstOrDefault(bar => bar.Orientation == WpfOrientation.Vertical);
-        _chatScrollThumb = verticalBar is null ? null : FindVisualChildren<Thumb>(verticalBar).FirstOrDefault();
-        if (_chatScrollThumb is null) return;
-        _chatScrollThumb.DragStarted += ChatScrollThumb_OnDragStarted;
-        _chatScrollThumb.DragCompleted += ChatScrollThumb_OnDragCompleted;
-    }
-
-    private void ChatScrollThumb_OnDragStarted(object sender, DragStartedEventArgs e)
-    {
-        _followTail = false;
-        _fastScrollSettleTimer.Stop();
-        EnterFastChatScrolling(ChatScrollMode.ThumbDrag);
-    }
-
-    private void ChatScrollThumb_OnDragCompleted(object sender, DragCompletedEventArgs e)
-    {
-        if (_chatScrollMode != ChatScrollMode.ThumbDrag) return;
-        _chatScrollMode = ChatScrollMode.Settling;
-        RestartFastScrollSettleTimer();
-    }
-
-    private void RestartFastScrollSettleTimer()
-    {
-        _fastScrollSettleTimer.Stop();
-        _fastScrollSettleTimer.Start();
-    }
-
-    private void BeginChatRenderRecovery()
-    {
-        _fastScrollSettleTimer.Stop();
-        if (_chatScrollMode is ChatScrollMode.Idle or ChatScrollMode.ThumbDrag) return;
-        _chatScrollMode = ChatScrollMode.Settling;
-        FreezeRealizedMarkdown();
-
-        if (DataContext is ManagerViewModel viewModel)
-            viewModel.IsChatMarkdownRenderingDeferred = false;
-
-        var scrollViewer = GetChatScrollViewer();
-        var candidates = FindVisualChildren<MarkdownViewer>(ManagerChatList)
-            .Where(viewer => viewer.IsRenderPending)
-            .Select(viewer => new { Viewer = viewer, Distance = GetViewerDistanceFromViewport(viewer, scrollViewer), IsVisible = IsViewerInViewport(viewer, scrollViewer) })
-            .OrderBy(item => item.Distance)
-            .ToArray();
-
-        var visible = candidates.Where(item => item.IsVisible).Select(item => item.Viewer).ToArray();
-        var prefetch = candidates.Where(item => !item.IsVisible && item.Distance <= Math.Max(300, scrollViewer?.ViewportHeight * 0.5 ?? 300)).Select(item => item.Viewer).ToArray();
-        _chatRenderRecoveryScheduler.Start(visible, prefetch, CompleteVisibleChatRecovery);
-    }
-
-    private void CompleteVisibleChatRecovery()
-    {
-        if (_chatScrollMode != ChatScrollMode.Settling) return;
-        // Viewers that already had a correct document never entered the
-        // recovery queue. Re-enable their permit now so a later operation
-        // expansion or streamed-text completion can render normally.
-        foreach (var viewer in FindVisualChildren<MarkdownViewer>(ManagerChatList).Where(viewer => !viewer.IsRenderPending))
-            viewer.SetRenderPermit(true);
-        _chatScrollMode = ChatScrollMode.Idle;
-        if (DataContext is ManagerViewModel viewModel) viewModel.IsFastChatScrolling = false;
-    }
-
-    private void ResetChatScrollPipeline()
-    {
-        _fastScrollSettleTimer.Stop();
-        _chatRenderRecoveryScheduler.Cancel();
-        _chatScrollMode = ChatScrollMode.Idle;
-        if (DataContext is ManagerViewModel viewModel)
-        {
-            viewModel.IsChatMarkdownRenderingDeferred = false;
-            viewModel.IsFastChatScrolling = false;
-        }
-    }
-
-    private void FreezeRealizedMarkdown()
-    {
-        foreach (var viewer in FindVisualChildren<MarkdownViewer>(ManagerChatList)) viewer.SetRenderPermit(false);
-    }
-
-    private static bool IsViewerInViewport(FrameworkElement viewer, ScrollViewer? scrollViewer)
-    {
-        if (scrollViewer is null || !viewer.IsLoaded) return false;
-        try
-        {
-            var bounds = viewer.TransformToAncestor(scrollViewer).TransformBounds(new Rect(new WpfPoint(), viewer.RenderSize));
-            return bounds.Bottom >= 0 && bounds.Top <= scrollViewer.ViewportHeight;
-        }
-        catch (InvalidOperationException) { return false; }
-    }
-
-    private static double GetViewerDistanceFromViewport(FrameworkElement viewer, ScrollViewer? scrollViewer)
-    {
-        if (scrollViewer is null || !viewer.IsLoaded) return double.MaxValue;
-        try
-        {
-            var bounds = viewer.TransformToAncestor(scrollViewer).TransformBounds(new Rect(new WpfPoint(), viewer.RenderSize));
-            if (bounds.Bottom < 0) return -bounds.Bottom;
-            if (bounds.Top > scrollViewer.ViewportHeight) return bounds.Top - scrollViewer.ViewportHeight;
-            return 0;
-        }
-        catch (InvalidOperationException) { return double.MaxValue; }
-    }
 
     private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
     {
@@ -314,15 +147,6 @@ public partial class ManagerWindow : Window
         return null;
     }
 
-    private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent) where T : DependencyObject
-    {
-        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
-        {
-            var child = VisualTreeHelper.GetChild(parent, index);
-            if (child is T match) yield return match;
-            foreach (var nested in FindVisualChildren<T>(child)) yield return nested;
-        }
-    }
 
     private void Image_OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
