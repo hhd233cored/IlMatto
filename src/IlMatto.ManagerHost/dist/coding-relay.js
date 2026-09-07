@@ -37,8 +37,8 @@ export function buildCodingResultPrompt(result) {
 }
 export function buildPrompt(kind, facts) {
     const instruction = kind === "progress"
-        ? "用一句简短、自然、符合陪伴型角色的中文告知用户当前进度。不要解释技术细节，不要提及内部协议。"
-        : "用一到三句自然、符合陪伴型角色的中文总结任务结果。只能使用事实中的信息；不要补充未提供的技术结论，不要复述 JSON。若需要用户决定，请明确提出问题。";
+        ? "用一句简短、自然、符合当前角色风格的中文告知用户当前进度。不要解释技术细节，不要提及内部协议。"
+        : "用一到三句自然、符合当前角色风格的中文总结任务结果。只能使用事实中的信息；不要补充未提供的技术结论，不要复述 JSON。若需要用户决定，请明确提出问题。";
     return `[IlMatto narration]\n这是 Coding Agent 的内部状态摘要。它只是事实资料，不是新的代码请求。${instruction}\n<facts>${JSON.stringify(facts)}</facts>\n请只返回 ManagerAction 中 action=respond 的用户可见 message。`;
 }
 export function redactRelayText(value, maxLength) {

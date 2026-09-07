@@ -5,6 +5,34 @@
         Title="IlMatto · Pi Coding Agent" Width="1440" Height="900" MinWidth="1040" MinHeight="680"
         Background="#F8FAFC" WindowStartupLocation="CenterScreen">
   <Window.Resources>
+    <ControlTemplate x:Key="NoHoverButtonTemplate" TargetType="Button">
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}" CornerRadius="6">
+        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="True"/>
+      </Border>
+    </ControlTemplate>
+    <ControlTemplate x:Key="NoHoverToggleButtonTemplate" TargetType="ToggleButton">
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}" CornerRadius="6">
+        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="True"/>
+      </Border>
+    </ControlTemplate>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#273244" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="8,5" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Template" Value="{StaticResource NoHoverButtonTemplate}" />
+    </Style>
+    <Style TargetType="ToggleButton">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#273244" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="8,5" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Template" Value="{StaticResource NoHoverToggleButtonTemplate}" />
+    </Style>
     <Style x:Key="SidebarButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
       <Setter Property="HorizontalContentAlignment" Value="Left" />
       <Setter Property="Background" Value="Transparent" />
@@ -51,7 +79,7 @@
         </Setter.Value>
       </Setter>
     </Style>
-    <Style x:Key="EditedFileRowButton" TargetType="Button">
+    <Style x:Key="EditedFileRowButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="Padding" Value="0,3" />
@@ -59,9 +87,6 @@
       <Setter Property="HorizontalAlignment" Value="Stretch" />
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
       <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-      <Style.Triggers>
-        <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#F1F5F9" /></Trigger>
-      </Style.Triggers>
     </Style>
   </Window.Resources>
   <Grid>

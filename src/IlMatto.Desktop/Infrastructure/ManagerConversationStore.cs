@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using IlMatto.Desktop.Models;
 
 namespace IlMatto.Desktop.Infrastructure;
@@ -40,7 +41,15 @@ public static class ManagerConversationStore
                 {
                     WorkspacePath = snapshot.WorkspacePath ?? "", AntigravityConversationId = snapshot.AntigravityConversationId,
                     PiSessionFile = snapshot.PiSessionFile, UpdatedAt = snapshot.UpdatedAt,
-                    CompanionProfile = snapshot.CompanionProfile ?? new ManagerCompanionProfile(),
+                    DraftText = snapshot.DraftText ?? "",
+                    CompanionProfile = snapshot.CompanionProfile is null ? new ManagerCompanionProfile() : new ManagerCompanionProfile
+                    {
+                        CharacterName = snapshot.CompanionProfile.CharacterName ?? "",
+                        CharacterPrompt = snapshot.CompanionProfile.CharacterPrompt,
+                        // A legacy user profile can still seed profile.md when
+                        // an old conversation is resumed for the first time.
+                        UserProfile = snapshot.CompanionProfile.UserProfile ?? "",
+                    },
                     MainAgent = mainAgent,
                     CodingAgent = codingAgent
                 };
@@ -74,7 +83,7 @@ public static class ManagerConversationStore
                             MimeType = attachment.MimeType ?? "",
                             Order = attachment.Order ?? index,
                         }))
-                    { CodeResult = message.CodeResult, ThinkingText = "", IsThinking = false, TaskId = message.TaskId };
+                    { CodeResult = message.CodeResult, ThinkingText = "", IsThinking = false, TaskId = message.TaskId, Runtime = RestoreRuntime(message.Runtime) };
                     if (!IsStructuredCodeResultText(message.Text) && message.Segments is { Count: > 0 })
                     {
                         entry.Text = restoredText;
@@ -116,11 +125,14 @@ public static class ManagerConversationStore
     {
         var directory = Path.GetDirectoryName(StorePath)!;
         Directory.CreateDirectory(directory);
-        var snapshots = conversations.OrderByDescending(item => item.UpdatedAt).Take(100).Select(item => new Snapshot
+        var snapshots = conversations.OrderByDescending(item => item.ListTimestamp).ThenByDescending(item => item.UpdatedAt).Take(100).Select(item => new Snapshot
         {
             SessionId = item.SessionId, Title = item.Title, WorkspacePath = item.WorkspacePath,
             AntigravityConversationId = item.AntigravityConversationId, PiSessionFile = item.PiSessionFile, UpdatedAt = item.UpdatedAt,
-            CompanionProfile = item.CompanionProfile,
+            DraftText = Limit(item.DraftText),
+            // New snapshots persist only the role card. UserProfile is kept
+            // in the legacy DTO below solely for one-time migration.
+            CompanionProfile = new CompanionProfileSnapshot { CharacterName = item.CompanionProfile.CharacterName, CharacterPrompt = item.CompanionProfile.CharacterPrompt },
             MainAgent = item.MainAgent, CodingAgent = item.CodingAgent,
             Messages = item.Messages.Select(message => new MessageSnapshot
             {
@@ -132,6 +144,15 @@ public static class ManagerConversationStore
                 ThinkingText = Limit(message.ThinkingText),
                 IsThinking = message.IsThinking,
                 CodeResult = message.CodeResult,
+                Runtime = message.Runtime is null ? null : new RuntimeSnapshot
+                {
+                    TaskId = message.Runtime.TaskId,
+                    TurnId = message.Runtime.TurnId,
+                    StartedAt = message.Runtime.StartedAt.ToString("O"),
+                    CompletedAt = message.Runtime.CompletedAt?.ToString("O"),
+                    DurationMs = message.Runtime.DurationMs,
+                    State = message.Runtime.State,
+                },
                 Attachments = message.Attachments.Select(attachment => new AttachmentSnapshot
                 {
                     AttachmentId = attachment.AttachmentId,
@@ -164,13 +185,37 @@ public static class ManagerConversationStore
     }
 
     private static string Limit(string value) => value.Length <= 64_000 ? value : value[..64_000] + "\n…（内容已截断）";
+
+    private static TaskRuntimeInfo? RestoreRuntime(RuntimeSnapshot? snapshot)
+    {
+        if (snapshot is null || !DateTimeOffset.TryParse(snapshot.StartedAt, out var startedAt)) return null;
+        var runtime = new TaskRuntimeInfo(snapshot.TaskId, snapshot.TurnId, startedAt, snapshot.State ?? "completed");
+        if (snapshot.CompletedAt is not null && DateTimeOffset.TryParse(snapshot.CompletedAt, out var completedAt))
+            runtime.Mark(snapshot.State ?? "completed", completedAt, snapshot.DurationMs);
+        else
+        {
+            // An unfinished snapshot must not come back as a live task. Freeze
+            // its elapsed value at load time (graceful shutdown normally
+            // persists the authoritative value; this also covers a crash).
+            var frozenDuration = snapshot.DurationMs ?? Math.Max(0, (long)(DateTimeOffset.UtcNow - startedAt).TotalMilliseconds);
+            runtime.Mark(runtime.IsActive ? "cancelled" : snapshot.State ?? "completed", null, frozenDuration);
+        }
+        return runtime;
+    }
     private static bool IsStructuredCodeResultText(string? value)
     {
         var text = value?.TrimStart() ?? "";
         return text.StartsWith("{", StringComparison.Ordinal) &&
                (text.Contains("\"summaryForUser\"", StringComparison.Ordinal) || text.Contains("\"status\"", StringComparison.Ordinal));
     }
-    private sealed class Snapshot { public string SessionId { get; set; } = ""; public string Title { get; set; } = ""; public string? WorkspacePath { get; set; } public string? AntigravityConversationId { get; set; } public string? PiSessionFile { get; set; } public ManagerCompanionProfile? CompanionProfile { get; set; } public ManagerMainAgentBinding? MainAgent { get; set; } public ManagerCodingAgentBinding? CodingAgent { get; set; } public DateTime UpdatedAt { get; set; } public List<MessageSnapshot>? Messages { get; set; } }
+    private sealed class Snapshot { public string SessionId { get; set; } = ""; public string Title { get; set; } = ""; public string? WorkspacePath { get; set; } public string? AntigravityConversationId { get; set; } public string? PiSessionFile { get; set; } public string? DraftText { get; set; } public CompanionProfileSnapshot? CompanionProfile { get; set; } public ManagerMainAgentBinding? MainAgent { get; set; } public ManagerCodingAgentBinding? CodingAgent { get; set; } public DateTime UpdatedAt { get; set; } public List<MessageSnapshot>? Messages { get; set; } }
+    private sealed class CompanionProfileSnapshot
+    {
+        public string? CharacterName { get; set; }
+        public string CharacterPrompt { get; set; } = "";
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? UserProfile { get; set; }
+    }
     private sealed class MessageSnapshot
     {
         public string Role { get; set; } = "";
@@ -181,8 +226,19 @@ public static class ManagerConversationStore
         public string? ThinkingText { get; set; }
         public bool IsThinking { get; set; }
         public ManagerCodeResult? CodeResult { get; set; }
+        public RuntimeSnapshot? Runtime { get; set; }
         public List<AttachmentSnapshot>? Attachments { get; set; }
         public List<SegmentSnapshot>? Segments { get; set; }
+    }
+
+    private sealed class RuntimeSnapshot
+    {
+        public string? TaskId { get; set; }
+        public string? TurnId { get; set; }
+        public string StartedAt { get; set; } = "";
+        public string? CompletedAt { get; set; }
+        public long? DurationMs { get; set; }
+        public string? State { get; set; }
     }
 
     private sealed class AttachmentSnapshot

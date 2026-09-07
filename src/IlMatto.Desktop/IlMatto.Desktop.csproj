@@ -12,6 +12,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="Emoji.Wpf" Version="0.3.4" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\IlMatto.AgentHost\dist\**" Link="AgentHost\dist\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\IlMatto.AgentHost\dist')" />

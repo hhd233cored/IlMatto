@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Text.Json.Serialization;
+using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace IlMatto.Desktop.Models;
@@ -14,29 +16,49 @@ public partial class ManagerConversationItem : ObservableObject
     [ObservableProperty] private ManagerMainAgentBinding? mainAgent;
     [ObservableProperty] private ManagerCodingAgentBinding? codingAgent;
     [ObservableProperty] private ManagerCompanionProfile companionProfile = new();
+    [ObservableProperty] private string draftText = "";
     [ObservableProperty] private DateTime updatedAt = DateTime.Now;
     public ObservableCollection<ManagerChatEntry> Messages { get; } = new();
-    public string ProviderLabel => $"陪伴 Agent（{MainAgent?.DisplayName ?? "Antigravity"}） → {CodingAgent?.DisplayName ?? "Pi"}";
+    [JsonIgnore]
+    public DateTime? LastUserMessageAt => Messages
+        .Where(message => message.IsUser)
+        .Select(message => (DateTime?)message.CreatedAt)
+        .Max();
+    [JsonIgnore]
+    public DateTime ListTimestamp => LastUserMessageAt ?? UpdatedAt;
+    public void NotifyMessageTimelineChanged()
+    {
+        OnPropertyChanged(nameof(LastUserMessageAt));
+        OnPropertyChanged(nameof(ListTimestamp));
+    }
+    partial void OnUpdatedAtChanged(DateTime value) => OnPropertyChanged(nameof(ListTimestamp));
+    public string CompanionDisplayName => string.IsNullOrWhiteSpace(CompanionProfile.CharacterName) ? "角色" : CompanionProfile.CharacterName.Trim();
+    public string ProviderLabel => $"{CompanionDisplayName}（{MainAgent?.DisplayName ?? "Antigravity"}） → {CodingAgent?.DisplayName ?? "Pi"}";
     partial void OnMainAgentChanged(ManagerMainAgentBinding? value) => OnPropertyChanged(nameof(ProviderLabel));
     partial void OnCodingAgentChanged(ManagerCodingAgentBinding? value) => OnPropertyChanged(nameof(ProviderLabel));
+    partial void OnCompanionProfileChanged(ManagerCompanionProfile value) { OnPropertyChanged(nameof(CompanionDisplayName)); OnPropertyChanged(nameof(ProviderLabel)); }
 }
 
 public sealed class ManagerCompanionProfile
 {
-    public string CharacterPrompt { get; set; } = "你是一个温和、自然、尊重边界的陪伴型 RP 角色；优先理解用户的情绪，用户没有明确求助时不主动说教或提供解决方案。";
+    public string CharacterName { get; set; } = "";
+    public string CharacterPrompt { get; set; } = "你是一个温和、自然、尊重边界的 RP 角色；优先理解用户的情绪，用户没有明确求助时不主动说教或提供解决方案。";
+    // Legacy seed retained so older settings/snapshots can initialize the
+    // new application-local profile.md. The active Manager reads profile.md.
     public string UserProfile { get; set; } = "";
-    public string RelationshipSummary { get; set; } = "你们刚开始建立关系，不假设未记录的共同经历。";
 
     public ManagerCompanionProfile Clone() => new()
     {
+        CharacterName = CharacterName,
         CharacterPrompt = CharacterPrompt,
         UserProfile = UserProfile,
-        RelationshipSummary = RelationshipSummary,
     };
 }
 
 public sealed class ManagerImageAttachment
 {
+    private BitmapImage? _previewImage;
+
     public string Type { get; set; } = "image";
     public string AttachmentId { get; set; } = Guid.NewGuid().ToString("N");
     public string Path { get; set; } = "";
@@ -44,6 +66,36 @@ public sealed class ManagerImageAttachment
     public string MimeType { get; set; } = "";
     public int Order { get; set; }
     public bool IsStaged { get; set; }
+
+    /// <summary>
+    /// Loads a detached, frozen bitmap so WPF does not keep the attachment
+    /// file open while the conversation is displayed. The path remains the
+    /// persisted source of truth; this property is only a UI projection.
+    /// </summary>
+    [JsonIgnore]
+    public BitmapImage? PreviewImage
+    {
+        get
+        {
+            if (_previewImage is not null) return _previewImage;
+            if (string.IsNullOrWhiteSpace(Path) || !System.IO.File.Exists(Path)) return null;
+            try
+            {
+                var bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.UriSource = new Uri(System.IO.Path.GetFullPath(Path), UriKind.Absolute);
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+                bitmap.EndInit();
+                bitmap.Freeze();
+                return _previewImage = bitmap;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
 
     public static ManagerImageAttachment FromPath(string path)
     {
@@ -77,6 +129,8 @@ public sealed class ManagerMainAgentBinding
     // normalizes such bindings to the legacy CLI transport on load.
     public string? Transport { get; set; }
     public string CliPath { get; set; } = "agy";
+    // Retained for old conversation snapshots only. Current Manager requests
+    // use the global AppSettings values instead of per-conversation choices.
     public string Model { get; set; } = "";
     public string Effort { get; set; } = "medium";
     public string ToolPermission { get; set; } = "always-proceed";
@@ -98,6 +152,8 @@ public sealed class ManagerCodingAgentBinding
 {
     public string Provider { get; set; } = "antigravity";
     public string CliPath { get; set; } = "codex";
+    // Retained for old conversation snapshots only. Current Manager requests
+    // use the global provider settings instead.
     public string Model { get; set; } = "";
     public string Effort { get; set; } = "medium";
     public string BaseUrl { get; set; } = "";
@@ -126,16 +182,29 @@ public partial class ManagerChatEntry : ObservableObject
     public string Role { get; }
     public string Source { get; }
     public string? TaskId { get; set; }
+    [ObservableProperty] private TaskRuntimeInfo? runtime;
     public DateTime CreatedAt { get; }
     public bool IsTransientStatus { get; }
     [ObservableProperty] private bool showDateSeparator;
     public bool IsUser => Role == "你" || Source == "user";
+    /// <summary>Hide the legacy provider suffix from older persisted Manager bubbles.</summary>
+    public string DisplayRole => Role
+        .Replace("（Antigravity CLI）", "", StringComparison.Ordinal)
+        .Replace(" (Antigravity CLI)", "", StringComparison.Ordinal)
+        .Trim();
     public string AvatarText => IsUser ? "你" : Source == "codex" ? "C" : Source == "pi" ? "Pi" : "AI";
     public string TimeLabel => CreatedAt.ToString("HH:mm");
     public string DateSeparatorLabel => CreatedAt.Date == DateTime.Today
         ? CreatedAt.ToString("HH:mm")
         : CreatedAt.ToString("yyyy-MM-dd HH:mm");
     [ObservableProperty] private string text;
+    /// <summary>
+    /// Runtime-only rendering hint for a response that is still receiving
+    /// deltas.  The view uses a light TextBlock during this phase and swaps to
+    /// the full Markdown renderer only after the stream has settled, avoiding
+    /// a complete FlowDocument rebuild for every incoming chunk.
+    /// </summary>
+    [ObservableProperty] private bool isStreamingText;
     /// <summary>
     /// The same text/operation timeline used by the Pi workbench. Keeping the
     /// timeline on the entry (rather than a single thinking field) means a
@@ -277,6 +346,56 @@ public partial class ManagerChatEntry : ObservableObject
     }
 }
 
+/// <summary>Top-level Agent turn/task timing shown in a manager bubble.</summary>
+public partial class TaskRuntimeInfo : ObservableObject
+{
+    public TaskRuntimeInfo(string? taskId, string? turnId, DateTimeOffset startedAt, string state = "running")
+    {
+        TaskId = taskId;
+        TurnId = turnId;
+        StartedAt = startedAt;
+        State = state;
+    }
+
+    public string? TaskId { get; }
+    public string? TurnId { get; }
+    public DateTimeOffset StartedAt { get; }
+    [ObservableProperty] private DateTimeOffset? completedAt;
+    [ObservableProperty] private long? durationMs;
+    [ObservableProperty] private string state;
+
+    public bool IsActive => State is "queued" or "running" or "awaiting_user_input" or "responding" or "routing" or "waiting_approval";
+    public string DisplayLabel
+    {
+        get
+        {
+            var elapsed = DurationMs ?? Math.Max(0, (long)(DateTimeOffset.UtcNow - StartedAt).TotalMilliseconds);
+            var duration = FormatDuration(elapsed);
+            return IsActive ? (State == "awaiting_user_input" || State == "waiting_approval" ? $"等待确认 · {duration}" : $"运行中 {duration}") : $"耗时 {duration}";
+        }
+    }
+
+    public void Mark(string nextState, DateTimeOffset? endedAt = null, long? authoritativeDurationMs = null)
+    {
+        State = nextState;
+        CompletedAt = endedAt;
+        DurationMs = authoritativeDurationMs ?? (endedAt.HasValue ? Math.Max(0, (long)(endedAt.Value - StartedAt).TotalMilliseconds) : DurationMs);
+        OnPropertyChanged(nameof(IsActive));
+        OnPropertyChanged(nameof(DisplayLabel));
+    }
+
+    public void RefreshElapsed() => OnPropertyChanged(nameof(DisplayLabel));
+
+    private static string FormatDuration(long milliseconds)
+    {
+        var totalSeconds = Math.Max(0, milliseconds / 1000);
+        var seconds = totalSeconds % 60;
+        var minutes = (totalSeconds / 60) % 60;
+        var hours = totalSeconds / 3600;
+        return hours > 0 ? $"{hours}:{minutes:00}:{seconds:00}" : $"{minutes:00}:{seconds:00}";
+    }
+}
+
 public sealed class ManagerCodeResult
 {
     public string Status { get; set; } = "";
@@ -298,6 +417,7 @@ public partial class ManagerActivity : ObservableObject
     public ManagerActivity(string kind, string title, string status, string? callId = null) { Kind = kind; Title = title; Status = status; CallId = callId; }
     public string Kind { get; }
     public string? CallId { get; }
+    [ObservableProperty] private TaskRuntimeInfo? runtime;
     [ObservableProperty] private string title;
     [ObservableProperty] private string status;
     [ObservableProperty] private string details = "";

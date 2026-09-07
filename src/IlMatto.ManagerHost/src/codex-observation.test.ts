@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { CodexObservationController, CodexObservationStore } from "./codex-observation.js";
 import { CodexWorkerError } from "./codex-worker.js";
 import type { CodingWorkerEvent } from "./coding-worker.js";
@@ -68,6 +68,32 @@ test("Codex reports are session-scoped and diff reads are bounded", async () => 
     assert.equal((diff.data as any).diff.length <= 15, true);
     assert.match((diff.data as any).diff, /diff/);
     await controller.dispose();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("deleting Codex observation data removes only one Manager session", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ilmatto-codex-observation-delete-"));
+  try {
+    const store = new CodexObservationStore(root);
+    await store.saveReport({
+      taskId: "task-session-1", sessionId: "session-1", state: "completed", summary: "待删除", changedFiles: [], commands: [], tests: [], warnings: [], pendingQuestions: [],
+      startedAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+    }, "diff-1");
+    await store.appendEvent("task-session-1", { type: "tool_output", text: "event-1" });
+    await store.saveReport({
+      taskId: "task-session-2", sessionId: "session-2", state: "completed", summary: "保留", changedFiles: [], commands: [], tests: [], warnings: [], pendingQuestions: [],
+      startedAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+    });
+    const draft = await store.createDraft("session-1", root, "待删除草稿", []);
+
+    await store.deleteSession("session-1");
+    await assert.rejects(stat(path.join(root, "task-session-1.report.json")));
+    await assert.rejects(stat(path.join(root, "task-session-1.diff.txt")));
+    await assert.rejects(stat(path.join(root, "task-session-1.events.jsonl")));
+    await assert.rejects(stat(path.join(root, `${draft.draftId}.json`)));
+    assert.equal((await store.getReport("session-2"))?.summary, "保留");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -4,6 +4,29 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { buildCompanionSystemPrompt, defaultCompanionProfile } from "./companion.js";
+import { safeSessionId } from "./companion-memory.js";
+/** Names used by the generic IlMatto Agent Tools MCP. The legacy Codex-only
+ * names remain recognized so an upgrade can remove stale generated entries
+ * without touching user-owned MCP servers. */
+const CURRENT_MCP_PREFIX = "ilmatto-agent-tools-";
+const LEGACY_MCP_PREFIX = "ilmatto-codex-observation-";
+const LEGACY_GLOBAL_MCP_NAME = "ilmatto-codex-observation";
+let mcpConfigQueue = Promise.resolve();
+async function withMcpConfigLock(operation) {
+    const previous = mcpConfigQueue;
+    let release;
+    mcpConfigQueue = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try {
+        return await operation();
+    }
+    finally {
+        release();
+    }
+}
+function isGeneratedWorkspaceMcpName(name) {
+    return name.startsWith(CURRENT_MCP_PREFIX) || name.startsWith(LEGACY_MCP_PREFIX);
+}
 /**
  * The unified Manager runtime deliberately contains no generated Agent
  * definition or permission file. `root` is the user-selected workspace so
@@ -100,6 +123,7 @@ export async function ensureManagerRuntime(profile) {
     // Manager never calls this function; it uses ensureUnifiedManagerRuntime,
     // which does not generate any AGY files.
     const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+    const memoryRoot = path.resolve(process.env.ILMATTO_COMPANION_MEMORY_DIR ?? path.join(localAppData, "IlMatto", "companion-memory"));
     const root = path.resolve(process.env.ILMATTO_MANAGER_RUNTIME ?? path.join(localAppData, "IlMatto", "manager-runtime"));
     const agentsRoot = path.join(root, ".agents", "agents");
     const logDirectory = path.resolve(process.env.ILMATTO_MANAGER_LOG_DIR ?? path.join(localAppData, "IlMatto", "logs"));
@@ -138,10 +162,11 @@ export async function ensureManagerRuntime(profile) {
     await writeFile(globalNestedAgentPath, agentDefinition, "utf8");
     await rm(legacyAgentDirectory, { recursive: true, force: true });
     await mkdir(attachmentsRoot, { recursive: true });
-    return { root, attachmentsRoot, schemaPath, logPath, globalSettingsPath, agentName, agentPath };
+    return { root, memoryRoot, attachmentsRoot, schemaPath, logPath, globalSettingsPath, agentName, agentPath };
 }
 export async function ensureUnifiedManagerRuntime(workspacePath, _profile, options) {
     const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+    const memoryRoot = path.resolve(process.env.ILMATTO_COMPANION_MEMORY_DIR ?? path.join(localAppData, "IlMatto", "companion-memory"));
     const configuredRuntime = path.resolve(process.env.ILMATTO_MANAGER_RUNTIME ?? path.join(localAppData, "IlMatto", "manager-runtime"));
     const root = workspacePath ? path.resolve(workspacePath) : configuredRuntime;
     const logDirectory = path.resolve(process.env.ILMATTO_MANAGER_LOG_DIR ?? path.join(localAppData, "IlMatto", "logs"));
@@ -172,11 +197,12 @@ export async function ensureUnifiedManagerRuntime(workspacePath, _profile, optio
         catch (error) {
             // MCP is optional. A read-only/invalid workspace config must not stop
             // the unified Antigravity session from starting.
-            mcpMountError = error instanceof Error ? error.message : "无法挂载 Codex 观察 MCP。";
+            mcpMountError = error instanceof Error ? error.message : "无法挂载 IlMatto Agent Tools MCP。";
         }
     }
     return {
         root,
+        memoryRoot,
         attachmentsRoot,
         // Kept as an empty compatibility field so the unified process cannot
         // accidentally opt into structured output through a stale path.
@@ -202,7 +228,7 @@ async function cleanupLegacyWorkspaceMcp(workspacePath, options) {
         const remaining = { ...servers };
         let changed = false;
         for (const [name, value] of Object.entries(remaining)) {
-            if (!name.startsWith("ilmatto-codex-observation-") || !value || typeof value !== "object" || Array.isArray(value))
+            if (!isGeneratedWorkspaceMcpName(name) || !value || typeof value !== "object" || Array.isArray(value))
                 continue;
             const entry = value;
             const args = entry.args;
@@ -232,7 +258,7 @@ async function cleanupLegacyWorkspaceMcpPlugins(workspacePath, options) {
     const registryPath = path.join(workspacePath, ".agents", "plugins.json");
     let pluginNames;
     try {
-        pluginNames = (await readdir(pluginsRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory() && entry.name.startsWith("ilmatto-codex-observation-")).map((entry) => entry.name);
+        pluginNames = (await readdir(pluginsRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory() && isGeneratedWorkspaceMcpName(entry.name)).map((entry) => entry.name);
     }
     catch {
         return;
@@ -289,11 +315,11 @@ async function cleanupLegacyWorkspaceMcpPlugins(workspacePath, options) {
  */
 async function mountWorkspaceMcp(workspacePath, options) {
     if (!existsSync(options.scriptPath))
-        throw new Error(`找不到 Codex 观察 MCP：${options.scriptPath}`);
+        throw new Error(`找不到 IlMatto Agent Tools MCP：${options.scriptPath}`);
     const agentsRoot = path.join(workspacePath, ".agents");
     const pluginsRoot = path.join(agentsRoot, "plugins");
     const sessionKey = createHash("sha256").update(`${workspacePath}\n${options.sessionId}`, "utf8").digest("hex").slice(0, 12);
-    const serverName = `ilmatto-codex-observation-${sessionKey}`;
+    const serverName = `${CURRENT_MCP_PREFIX}${sessionKey}`;
     const pluginDirectory = path.join(pluginsRoot, serverName);
     const manifestPath = path.join(pluginDirectory, "plugin.json");
     const configPath = path.join(pluginDirectory, "mcp_config.json");
@@ -405,18 +431,22 @@ function escapeRegex(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 /**
- * Add the observation Facade to Antigravity's user-level MCP configuration.
+ * Add the generic Agent Tools Facade to Antigravity's user-level MCP configuration.
  * The entry is deliberately temporary: it points at the current ManagerHost
  * named pipe and is removed on normal shutdown if it has not been edited by
- * the user. A stable server name prevents stale per-session entries from
- * accumulating in the global file after a restart.
+ * the user. A session-scoped server name prevents multiple ManagerHost
+ * instances from claiming the same MCP entry in the global file.
  */
 async function mountGlobalMcp(options) {
+    return withMcpConfigLock(() => mountGlobalMcpUnlocked(options));
+}
+async function mountGlobalMcpUnlocked(options) {
     if (!existsSync(options.scriptPath))
-        throw new Error(`找不到 Codex 观察 MCP：${options.scriptPath}`);
+        throw new Error(`找不到 IlMatto Agent Tools MCP：${options.scriptPath}`);
     const defaultPath = path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
     const configPath = path.resolve(options.configPath ?? process.env.ILMATTO_MANAGER_MCP_CONFIG_PATH ?? defaultPath);
-    const serverName = "ilmatto-codex-observation";
+    const sessionKey = createHash("sha256").update(options.sessionId, "utf8").digest("hex").slice(0, 12);
+    const serverName = `${CURRENT_MCP_PREFIX}${sessionKey}`;
     let config = {};
     try {
         const parsed = JSON.parse(await readFile(configPath, "utf8"));
@@ -437,6 +467,12 @@ async function mountGlobalMcp(options) {
         args: [path.resolve(options.scriptPath), "--pipe", options.pipeName, "--session-id", options.sessionId],
     };
     const servers = { ...(existingServers ?? {}) };
+    // Remove only a stale legacy entry that was generated by IlMatto. A user
+    // owned server with the old name is preserved and the new generic name is
+    // used alongside it.
+    const legacyDefinition = servers[LEGACY_GLOBAL_MCP_NAME];
+    if (legacyDefinition !== undefined && isIlMattoGeneratedDefinition(legacyDefinition, options))
+        delete servers[LEGACY_GLOBAL_MCP_NAME];
     const previous = servers[serverName];
     if (previous !== undefined && !deepEqual(previous, definition) && !isIlMattoGeneratedDefinition(previous, options)) {
         throw new Error(`Antigravity 全局 MCP Server 名称已被占用：${serverName}`);
@@ -514,7 +550,62 @@ export async function cleanupManagerRuntime(runtime) {
         catch { }
     }
 }
+/**
+ * Remove the IlMatto-owned, session-scoped files while intentionally leaving
+ * the Antigravity CLI conversation untouched. This includes the shared
+ * memory store's per-session directory, the desktop's copied attachments, and
+ * the runtime copies consumed by Antigravity. The global profile.md and all
+ * user-owned runtime/configuration files remain in place.
+ */
+export async function cleanupManagerSessionData(runtime, sessionId) {
+    const safeId = safeSessionId(sessionId);
+    const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+    const configuredRuntime = path.resolve(process.env.ILMATTO_MANAGER_RUNTIME ?? path.join(localAppData, "IlMatto", "manager-runtime"));
+    const memoryRoot = path.resolve(runtime?.memoryRoot ?? process.env.ILMATTO_COMPANION_MEMORY_DIR ?? path.join(localAppData, "IlMatto", "companion-memory"));
+    const managedAttachmentsRoot = path.join(localAppData, "IlMatto", "manager-sessions", "attachments");
+    const runtimeAttachmentsRoot = path.resolve(runtime?.attachmentsRoot ?? path.join(configuredRuntime, "attachments"));
+    const targets = [
+        path.join(memoryRoot, "sessions", safeId),
+        path.join(managedAttachmentsRoot, safeId),
+        path.join(runtimeAttachmentsRoot, safeId),
+    ];
+    const failures = [];
+    for (const target of targets) {
+        try {
+            await removeManagerSessionTargetWithRetry(target);
+        }
+        catch (error) {
+            failures.push(`${target}: ${error instanceof Error ? error.message : "未知错误"}`);
+        }
+    }
+    // Keep the helper best-effort across all owned locations, but report a
+    // failure after attempting every target so the desktop can surface it.
+    if (failures.length > 0)
+        throw new Error(`部分 Manager 会话数据未能删除：\n${failures.join("\n")}`);
+}
+/** Windows may briefly keep an attachment open while the UI or an executor
+ * finishes reading it. Retry only transient removal failures; never broaden
+ * the target beyond the already validated session directory. */
+async function removeManagerSessionTargetWithRetry(target) {
+    const delays = [0, 120, 250, 500, 1000, 1500];
+    let lastError;
+    for (const delay of delays) {
+        if (delay > 0)
+            await new Promise((resolve) => setTimeout(resolve, delay));
+        try {
+            await rm(target, { recursive: true, force: true });
+            return;
+        }
+        catch (error) {
+            lastError = error;
+        }
+    }
+    throw lastError instanceof Error ? lastError : new Error("删除会话目录失败。");
+}
 async function cleanupMcp(mount) {
+    await withMcpConfigLock(() => cleanupMcpUnlocked(mount));
+}
+async function cleanupMcpUnlocked(mount) {
     try {
         const parsed = JSON.parse(await readFile(mount.configPath, "utf8"));
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))

@@ -2,6 +2,7 @@ import path from "node:path";
 import { copyFile, mkdir, realpath, stat } from "node:fs/promises";
 import type { ManagerImageAttachment } from "./protocol.js";
 import type { ManagerRuntime } from "./runtime.js";
+import { buildCompanionWebResearchInstructions } from "./companion-research.js";
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg"]);
@@ -35,6 +36,7 @@ export async function stageManagedImages(
   const destinationRoot = path.resolve(runtime.attachmentsRoot ?? path.join(runtime.root, "attachments"), sessionId);
   await mkdir(destinationRoot, { recursive: true });
   const staged: StagedManagerImage[] = [];
+  const usedAttachmentIds = new Set<string>();
 
   for (const [index, attachment] of attachments.entries()) {
     const sourcePath = path.resolve(attachment.path);
@@ -53,7 +55,7 @@ export async function stageManagedImages(
 
     const extension = path.extname(sourceReal).toLowerCase();
     if (!IMAGE_EXTENSIONS.has(extension)) throw new ImageStagingError("IMAGE_ATTACHMENT_INVALID", "不支持的图片格式。");
-    const attachmentId = safeAttachmentId(attachment.attachmentId, index);
+    const attachmentId = uniqueAttachmentId(safeAttachmentId(attachment.attachmentId, index), usedAttachmentIds);
     const runtimePath = path.join(destinationRoot, `${attachmentId}${extension}`);
     await copyFile(sourceReal, runtimePath);
     staged.push({ attachmentId, sourcePath: sourceReal, runtimePath });
@@ -61,17 +63,45 @@ export async function stageManagedImages(
   return staged;
 }
 
-export function buildImageAwareCompanionPrompt(userMessage: string, images: readonly StagedManagerImage[]): string {
-  const paths = images.map((image) => `"${image.runtimePath}"`).join("\n");
-  return `The following IlMatto-managed image file(s) were attached for this turn. Decide whether image/file tools are useful and answer the user's message. The listed paths are provided as helpful context; Antigravity controls the tool choice. For image understanding these are the only paths permitted for the read-only view_file tool by the attachment contract; this is not a host-side tool restriction.
+/** Re-check a staged image immediately before a host-side tool consumes it.
+ * AGY has full workspace permissions, so the path must be resolved again in
+ * case a turn replaced the staged file with a symlink or another file. */
+export async function resolveManagedImagePath(runtime: ManagerRuntime, sessionId: string, image: StagedManagerImage): Promise<string> {
+  const managedRoot = path.resolve(runtime.attachmentsRoot ?? path.join(runtime.root, "attachments"), sessionId);
+  const managedRootReal = await realpath(managedRoot).catch(() => "");
+  const candidate = path.resolve(image.runtimePath);
+  const relative = path.relative(managedRoot, candidate);
+  if (!managedRootReal || !relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new ImageStagingError("IMAGE_ATTACHMENT_UNMANAGED", "图片附件路径未通过受管目录校验。");
+  }
+  const candidateReal = await realpath(candidate).catch(() => "");
+  const realRelative = candidateReal ? path.relative(managedRootReal, candidateReal) : "";
+  if (!candidateReal || !realRelative || realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+    throw new ImageStagingError("IMAGE_ATTACHMENT_UNMANAGED", "图片附件路径未通过受管目录校验。");
+  }
+  const info = await stat(candidateReal).catch(() => undefined);
+  if (!info?.isFile()) throw new ImageStagingError("IMAGE_ATTACHMENT_INVALID", "图片附件不是普通文件。");
+  if (!IMAGE_EXTENSIONS.has(path.extname(candidateReal).toLowerCase())) throw new ImageStagingError("IMAGE_ATTACHMENT_INVALID", "不支持的图片格式。");
+  if (info.size > MAX_IMAGE_BYTES) throw new ImageStagingError("IMAGE_ATTACHMENT_TOO_LARGE", "单张图片不能超过 20 MiB。");
+  return candidateReal;
+}
 
-Managed image path(s) for this turn:
+export function buildImageAwareCompanionPrompt(userMessage: string, images: readonly StagedManagerImage[]): string {
+  const paths = images.map((image) => `- attachment_id: ${image.attachmentId}\n  managed_path: "${image.runtimePath}"`).join("\n");
+  return `The following IlMatto-managed image file(s) were attached for this turn. Answer the user's message using the smallest set of tools necessary. The paths below are managed image attachments, not an invitation to browse the workspace.
+
+${buildCompanionWebResearchInstructions()}
+
+For ordinary image descriptions, OCR, or UI analysis, use the exact managed image path only when visual inspection is needed. Never inspect a parent directory, a workspace file, or an arbitrary path merely to infer information from the image. The selected attachment will be sent to Google Cloud Vision when the available image lookup tool is used.
+
+Managed image attachment(s) for this turn:
 ${paths}
 
 Image tool instructions:
-- Use the appropriate built-in tool when image understanding is needed.
 - Treat the paths above as local attachments supplied by the user.
-- Pass one of the paths above exactly as written when a tool requires a path.
+- If a built-in image tool requires a path, pass one of the paths above exactly as written.
+- The identify_image MCP tool is available for read-only web image lookup. When image identification is useful, call it with the matching attachment_id rather than inventing a local path. Treat its returned entities as candidates and supporting evidence, not as a guaranteed answer.
+- Do not use run_command, grep_search, or any file/terminal tool after web research unless the user's message explicitly asks for it.
 
 User message:
 ${userMessage}`;
@@ -84,4 +114,12 @@ export class ImageStagingError extends Error {
 function safeAttachmentId(value: string | undefined, index: number): string {
   const normalized = value?.trim().replace(/[^A-Za-z0-9_-]/g, "").slice(0, 80);
   return normalized || `image-${index + 1}`;
+}
+
+function uniqueAttachmentId(base: string, used: Set<string>): string {
+  if (!used.has(base)) { used.add(base); return base; }
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!used.has(candidate)) { used.add(candidate); return candidate; }
+  }
 }

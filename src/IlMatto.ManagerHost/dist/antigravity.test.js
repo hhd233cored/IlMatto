@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { AntigravitySession, AntigravitySessionError, coordinatorStepPolicyViolation, execFileWithClosedStdin, extractAntigravityProgress, extractManagerMessage, isAuthenticationError, isManagerAgentFallback, parseAntigravityModels, parseAntigravityResult, shouldPassAntigravityEffort, validateAntigravityInit } from "./antigravity.js";
+import { AntigravitySession, AntigravitySessionError, coordinatorStepPolicyViolation, DEFAULT_ANTIGRAVITY_PRINT_TIMEOUT, execFileWithClosedStdin, extractAntigravityProgress, extractManagerMessage, imageLookupSoftPolicyViolation, isAuthenticationError, isManagerAgentFallback, parseAntigravityModels, parseAntigravityResult, shouldPassAntigravityEffort, validateAntigravityInit } from "./antigravity.js";
 test("Antigravity authentication failures are recognized without exposing credentials", () => {
     assert.equal(isAuthenticationError("authentication required"), true);
     assert.equal(isAuthenticationError("Not logged in. Run agy first."), true);
@@ -84,6 +84,13 @@ test("coordinator allows view_file only for the current managed image path", () 
     assert.match(coordinatorStepPolicyViolation({ ...step, tool_info: { parameters: { AbsolutePath: "C:\\runtime\\other.txt" } } }, [allowed]) ?? "", /current managed image set/);
     assert.match(coordinatorStepPolicyViolation({ step_type: "tool", tool_name: "view_file", tool_info: { parameters: {} } }, [allowed]) ?? "", /verifiable image path/);
 });
+test("image lookup soft policy observes unsafe tools without treating identify_image as a violation", () => {
+    const allowed = "C:\\runtime\\attachments\\session\\image.png";
+    assert.equal(imageLookupSoftPolicyViolation({ step_type: "tool", tool_name: "identify_image", tool_info: { parameters: { attachment_id: "image-1" } } }, [allowed]), undefined);
+    assert.equal(imageLookupSoftPolicyViolation({ step_type: "tool", tool_name: "search_web", tool_info: { parameters: { query: "character" } } }, [allowed]), undefined);
+    assert.match(imageLookupSoftPolicyViolation({ step_type: "tool", tool_name: "run_command" }, [allowed]) ?? "", /forbidden tool: run_command/);
+    assert.match(imageLookupSoftPolicyViolation({ step_type: "tool", tool_name: "view_file", tool_info: { parameters: { AbsolutePath: "C:\\runtime\\workspace\\notes.txt" } } }, [allowed]) ?? "", /current managed image set/);
+});
 test("Antigravity exposes each new tool call as a distinct stream event", async () => {
     const process = new ScriptedAntigravityProcess((instance, _prompt, turn) => {
         if (turn === 1) {
@@ -116,6 +123,7 @@ test("manager detects AGY silent fallback to the default agent", () => {
 test("pinned Antigravity model variants do not receive a duplicate effort flag", () => {
     assert.equal(shouldPassAntigravityEffort("gemini-3.7-flash-high"), false);
     assert.equal(shouldPassAntigravityEffort("gemini-3.7-flash-medium"), false);
+    assert.equal(shouldPassAntigravityEffort("gemini-3.7-flash-med"), false);
     assert.equal(shouldPassAntigravityEffort("gemini-3.7-flash"), true);
     assert.equal(shouldPassAntigravityEffort(undefined), true);
 });
@@ -233,7 +241,7 @@ test("unified text mode uses one full-permission AGY process without schema flag
         instance.emitStep("已完成文件检查和测试。");
         instance.emitResult({ status: "SUCCESS", response: "已完成文件检查和测试。" });
     });
-    const session = new AntigravitySession("agy", testRuntime(), 2, "medium", undefined, undefined, ((_file, args) => {
+    const session = new AntigravitySession("agy", testRuntime(), 0, "medium", undefined, undefined, ((_file, args) => {
         launches.push(args);
         return process;
     }), "unified-test", false);
@@ -246,6 +254,7 @@ test("unified text mode uses one full-permission AGY process without schema flag
         const args = launches[0];
         assert.ok(args.includes("--dangerously-skip-permissions"));
         assert.ok(args.includes("--mode") && args.includes("accept-edits"));
+        assert.equal(args[args.indexOf("--print-timeout") + 1], DEFAULT_ANTIGRAVITY_PRINT_TIMEOUT);
         assert.equal(args.includes("--agent"), false);
         assert.equal(args.includes("--json-schema"), false);
         assert.equal(args.includes("--sandbox"), false);
@@ -266,6 +275,31 @@ test("unified text mode accepts nested AGY response text", async () => {
     }
     finally {
         session.dispose();
+    }
+});
+test("unified image turns record soft-policy violations without interrupting the turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "ilmatto-antigravity-image-policy-"));
+    const allowed = path.join(root, "attachments", "image-1.png");
+    const runtime = { root, schemaPath: path.join(root, "schema.json"), logPath: path.join(root, "agy.log"), agentName: "ilmatto-manager-test" };
+    const process = new ScriptedAntigravityProcess((instance) => {
+        instance.emitInit();
+        instance.emitTool("identify_image", "lookup-1");
+        instance.emitTool("run_command", "command-1");
+        instance.emitResult({ status: "SUCCESS", response: "识图完成" });
+    });
+    const session = new AntigravitySession("agy", runtime, 2, "medium", undefined, undefined, (() => process), "image-policy-test", false);
+    try {
+        const turn = await session.ask("这个角色是谁？", undefined, [allowed]);
+        assert.equal(turn.text, "识图完成");
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        const log = await readFile(path.join(root, "antigravity-session.log"), "utf8");
+        assert.match(log, /image_soft_policy_violation/);
+        assert.match(log, /"tool":"run_command"/);
+        assert.match(log, /"afterImageLookup":true/);
+    }
+    finally {
+        session.dispose();
+        await rm(root, { recursive: true, force: true });
     }
 });
 test("an exit before stdout closes drains the final result instead of failing the turn", async () => {

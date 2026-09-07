@@ -44,13 +44,16 @@ export function isManagerClientMessage(value) {
                 (!Array.isArray(message.conversationHistory) || !message.conversationHistory.every(isCompanionHistoryItem)))
                 return false;
             return Boolean(message.antigravity) || Boolean(message.mainAgent && message.codingAgent) || (typeof message.baseUrl === "string" && typeof message.modelId === "string");
+        case "activate_manager_session":
+            return session;
         case "send_manager_message": {
             const attachments = message.attachments;
             return session && typeof message.text === "string" &&
                 (message.text.length > 0 || (Array.isArray(attachments) && attachments.length > 0)) &&
                 (message.executor === undefined || isCodingProvider(message.executor)) &&
                 (attachments === undefined || (Array.isArray(attachments) && attachments.every(isManagerImageAttachment))) &&
-                (message.draftId === undefined || (typeof message.draftId === "string" && message.draftId.trim().length > 0));
+                (message.draftId === undefined || (typeof message.draftId === "string" && message.draftId.trim().length > 0)) &&
+                (message.generateTitle === undefined || typeof message.generateTitle === "boolean");
         }
         case "approve_coding_tool": return session && typeof message.callId === "string" && typeof message.approved === "boolean";
         case "resolve_coding_interaction": return session && typeof message.requestId === "string" && typeof message.approved === "boolean";
@@ -67,7 +70,15 @@ export function isManagerClientMessage(value) {
                 return false;
             return message.attachments === undefined || (Array.isArray(message.attachments) && message.attachments.every(isManagerImageAttachment));
         }
-        case "cancel_manager_turn": return session;
+        case "agent_tool_request":
+            return session && typeof message.requestId === "string" && message.requestId.length > 0 &&
+                message.operation === "identify_image" &&
+                (message.attachmentId === undefined || (typeof message.attachmentId === "string" && message.attachmentId.trim().length > 0)) &&
+                (message.question === undefined || typeof message.question === "string") &&
+                message.path === undefined && message.url === undefined;
+        case "companion_memory_request":
+            return isCompanionMemoryRequest(message, session);
+        case "cancel_manager_turn": return session && (message.target === undefined || message.target === "antigravity" || message.target === "codex" || message.target === "all");
         case "request_verification": return session && typeof message.taskId === "string" && message.taskId.length > 0;
         case "probe_codex": return session && (message.executable === undefined || typeof message.executable === "string");
         case "start_codex_login": return session && (message.executable === undefined || typeof message.executable === "string");
@@ -81,7 +92,46 @@ export function isCompanionProfile(value) {
     if (!value || typeof value !== "object")
         return false;
     const item = value;
-    return typeof item.characterPrompt === "string" && typeof item.userProfile === "string" && typeof item.relationshipSummary === "string";
+    return typeof item.characterPrompt === "string" &&
+        (item.characterName === undefined || typeof item.characterName === "string") &&
+        (item.userProfile === undefined || typeof item.userProfile === "string") &&
+        (item.relationshipSummary === undefined || typeof item.relationshipSummary === "string");
+}
+function isCompanionMemoryRequest(value, session) {
+    if (!session || typeof value.requestId !== "string" || !value.requestId ||
+        !["session_search", "session_open", "session_update", "profile_update"].includes(String(value.operation)))
+        return false;
+    if (value.query !== undefined && typeof value.query !== "string")
+        return false;
+    if (value.targetSessionId !== undefined && typeof value.targetSessionId !== "string")
+        return false;
+    if (value.limit !== undefined && (typeof value.limit !== "number" || !Number.isInteger(value.limit) || value.limit < 1 || value.limit > 5))
+        return false;
+    if (value.patch !== undefined && !isSessionSummaryPatch(value.patch))
+        return false;
+    if (value.profilePatch !== undefined && !isProfilePatch(value.profilePatch))
+        return false;
+    return true;
+}
+function isSessionSummaryPatch(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        return false;
+    const item = value;
+    return (item.title === undefined || typeof item.title === "string") &&
+        (item.summaryPatch === undefined || typeof item.summaryPatch === "string") &&
+        isOptionalStringArray(item.keyEvents) && isOptionalStringArray(item.openLoops) && isOptionalStringArray(item.keywords);
+}
+function isProfilePatch(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        return false;
+    const item = value;
+    return isProfileSection(item.section) && isOptionalStringArray(item.add) && isOptionalStringArray(item.remove);
+}
+function isProfileSection(value) {
+    return value === "basic" || value === "interests" || value === "preferences" || value === "boundaries" || value === "current_topics";
+}
+function isOptionalStringArray(value) {
+    return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === "string"));
 }
 /** Validate the compact single-session start payload without requiring any of
  * the legacy mainAgent/codingAgent fields.  Keeping this check at the pipe

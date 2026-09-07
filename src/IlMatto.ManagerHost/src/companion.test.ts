@@ -4,14 +4,16 @@ import { buildCompanionSystemPrompt, defaultCompanionProfile, normalizeCompanion
 
 test("companion prompt contains profile data and fixed routing rules", () => {
   const prompt = buildCompanionSystemPrompt({
+    characterName: "Luna",
     characterPrompt: "角色名是 Luna，语气克制。",
     userProfile: "用户喜欢雨天。",
-    relationshipSummary: "已经聊过几次，但没有未记录的共同经历。",
+    relationshipSummary: "旧版关系摘要不应继续进入活动 prompt。",
   });
 
   assert.match(prompt, /角色名是 Luna/);
-  assert.match(prompt, /用户喜欢雨天/);
-  assert.match(prompt, /已经聊过几次/);
+  assert.match(prompt, /role name is "Luna"/i);
+  assert.doesNotMatch(prompt, /用户喜欢雨天/);
+  assert.doesNotMatch(prompt, /旧版关系摘要/);
   assert.match(prompt, /search_web/);
   assert.match(prompt, /read_url_content/);
   assert.match(prompt, /built-in browser subagent/i);

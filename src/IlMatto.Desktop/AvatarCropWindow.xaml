@@ -1,0 +1,61 @@
+<Window x:Class="IlMatto.Desktop.AvatarCropWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="裁剪头像" Width="560" Height="700" MinWidth="520" MinHeight="640"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" Background="#F5F6F8">
+  <Window.Resources>
+    <ControlTemplate x:Key="NoHoverButtonTemplate" TargetType="Button">
+      <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}" CornerRadius="6">
+        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="True"/>
+      </Border>
+    </ControlTemplate>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="#FFFFFF"/>
+      <Setter Property="Foreground" Value="#273244"/>
+      <Setter Property="BorderBrush" Value="#D8DEE7"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="14,8"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="Template" Value="{StaticResource NoHoverButtonTemplate}"/>
+    </Style>
+    <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Background" Value="#2563EB"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+      <Setter Property="BorderBrush" Value="#2563EB"/>
+    </Style>
+  </Window.Resources>
+  <Grid Margin="24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <StackPanel Grid.Row="0" Margin="0,0,0,18">
+      <TextBlock Text="裁剪头像" FontSize="23" FontWeight="SemiBold" Foreground="#172033"/>
+      <TextBlock Text="拖动圆形选区调整位置，使用下方滑块调整裁剪范围。保存后会生成圆形透明 PNG。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,5,0,0"/>
+    </StackPanel>
+    <Border Grid.Row="1" Background="#E7ECF2" BorderBrush="#D6DEE8" BorderThickness="1" CornerRadius="14" Padding="10" HorizontalAlignment="Center" VerticalAlignment="Center">
+      <Canvas x:Name="CropCanvas" Width="420" Height="420" Background="#E7ECF2" ClipToBounds="True"
+              PreviewMouseLeftButtonDown="CropCanvas_OnPreviewMouseLeftButtonDown"
+              PreviewMouseMove="CropCanvas_OnPreviewMouseMove"
+              PreviewMouseLeftButtonUp="CropCanvas_OnPreviewMouseLeftButtonUp">
+        <Image x:Name="PreviewImage" IsHitTestVisible="False"/>
+        <Ellipse x:Name="CropCircle" Fill="#0AFFFFFF" Stroke="#FFFFFF" StrokeThickness="3" IsHitTestVisible="False"/>
+      </Canvas>
+    </Border>
+    <StackPanel Grid.Row="2" Margin="0,18,0,0">
+      <DockPanel>
+        <TextBlock Text="裁剪范围" Foreground="#4B5563" FontWeight="SemiBold"/>
+        <TextBlock DockPanel.Dock="Right" Text="拖动圆形选区" Foreground="#8A93A0" FontSize="12"/>
+      </DockPanel>
+      <Slider x:Name="CropSizeSlider" Minimum="0.25" Maximum="0.95" Value="0.65" TickFrequency="0.05" IsSnapToTickEnabled="True" Margin="0,8,0,0" ValueChanged="CropSizeSlider_OnValueChanged"/>
+    </StackPanel>
+    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
+      <Button Content="取消" IsCancel="True" MinWidth="84"/>
+      <Button Content="保存头像" IsDefault="True" Style="{StaticResource PrimaryButton}" Click="SaveButton_OnClick" MinWidth="104" Margin="9,0,0,0"/>
+    </StackPanel>
+  </Grid>
+</Window>

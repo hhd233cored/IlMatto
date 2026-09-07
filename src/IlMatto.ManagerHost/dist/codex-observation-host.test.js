@@ -35,7 +35,8 @@ test("ManagerHost exposes a Codex draft for input-box prefill without starting C
         socket.write(`${JSON.stringify({ type: "start_manager_session", sessionId: "session-1", workspacePath: root, antigravity: { executable: path.join(root, "missing-agy.exe") } })}\n`);
         await waitFor(() => events.find((event) => event.type === "manager_session_ready"), () => `${stderr} ${JSON.stringify(events)}`);
         const mcpConfig = JSON.parse(await readFile(path.join(root, "global-mcp_config.json"), "utf8"));
-        const ilmattoMcp = mcpConfig.mcpServers?.["ilmatto-codex-observation"];
+        const ilmattoMcpName = Object.keys(mcpConfig.mcpServers ?? {}).find((name) => name.startsWith("ilmatto-agent-tools-"));
+        const ilmattoMcp = ilmattoMcpName ? mcpConfig.mcpServers?.[ilmattoMcpName] : undefined;
         assert.ok(ilmattoMcp);
         assert.deepEqual(ilmattoMcp.args.slice(-4), ["--pipe", `\\\\.\\pipe\\${pipeName}`, "--session-id", "session-1"]);
         socket.write(`${JSON.stringify({ type: "codex_observation_request", sessionId: "session-1", requestId: "draft-request", operation: "draft_codex_task", workspacePath: root, prompt: "请修复测试" })}\n`);

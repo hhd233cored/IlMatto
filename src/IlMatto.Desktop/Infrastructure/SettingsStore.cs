@@ -37,6 +37,9 @@ public sealed class AppSettings
     public string CodexApprovalPolicy { get; set; } = "on-request";
     /// <summary>Native Codex sandbox mode: read-only, workspace-write, or danger-full-access.</summary>
     public string CodexSandboxMode { get; set; } = "workspace-write";
+    public string UserId { get; set; } = "用户";
+    public string UserAvatarPath { get; set; } = "";
+    public string AgentAvatarPath { get; set; } = "";
     public ManagerCompanionProfile DefaultCompanionProfile { get; set; } = new();
 
     internal static string FindCodexCli()

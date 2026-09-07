@@ -8,6 +8,25 @@ import type { ManagerRuntime } from "./runtime.js";
 
 export type AntigravityProbe = { available: boolean; authenticated: boolean; authenticationRequired?: boolean; version?: string; message?: string; models?: AgentModelInfo[] };
 export type AntigravityTurn = { action: ManagerAction; text?: string; conversationId?: string; cacheReadTokens?: number };
+/**
+ * AGY print mode does not document an unlimited timeout value. In particular,
+ * `0s` means "poll zero times" and therefore fails immediately. Keep the
+ * provider-side ceiling practically unreachable while the unified Manager
+ * itself remains free of a task timer. It can be overridden for diagnostics
+ * with a positive Go duration in ILMATTO_AGY_PRINT_TIMEOUT.
+ */
+export const DEFAULT_ANTIGRAVITY_PRINT_TIMEOUT = "24h";
+
+const AGY_DURATION_PART = "(?:\\d+(?:\\.\\d+)?)(?:ns|us|µs|ms|s|m|h)";
+const AGY_POSITIVE_DURATION = new RegExp(`^(?=.*[1-9])${AGY_DURATION_PART}+$`);
+
+function resolveAntigravityPrintTimeout(): string {
+  const configured = process.env.ILMATTO_AGY_PRINT_TIMEOUT?.trim();
+  return configured && AGY_POSITIVE_DURATION.test(configured)
+    ? configured
+    : DEFAULT_ANTIGRAVITY_PRINT_TIMEOUT;
+}
+
 export type CoordinatorStreamEvent =
   | { kind: "text" | "thinking"; text: string }
   | { kind: "tool"; text: string; toolName: string; callId: string; state?: "started" | "completed" };
@@ -115,6 +134,9 @@ type PendingAntigravityTurn = {
   textEmitted: boolean;
   resultReceived: boolean;
   seenToolCalls: Set<string>;
+  /** Soft-only observability for image turns. These sets never block a tool. */
+  softPolicyViolationCalls: Set<string>;
+  imageLookupToolSeen: boolean;
 };
 
 type FailedAntigravityTurn = {
@@ -158,6 +180,12 @@ export class AntigravitySession {
   }
 
   get activeConversationId(): string | undefined { return this.conversationId; }
+
+  /** True while the underlying CLI process is still reusable. */
+  get hasLiveProcess(): boolean {
+    const context = this.processContext;
+    return Boolean(context && context.state !== "closing" && context.state !== "exited" && !context.child.killed && context.child.stdin.writable);
+  }
 
   /** Keep the latest persisted transcript available for a future process
    * restart. The live AGY process already owns its own context, so changing
@@ -228,7 +256,13 @@ export class AntigravitySession {
       if (this.options.terminalSandbox || toolPermission === "proceed-in-sandbox") args.push("--sandbox");
     }
     args.push("--log-file", this.runtime.logPath);
-    if (this.timeoutSeconds > 0) args.splice(args.indexOf("--log-file"), 0, "--print-timeout", `${this.timeoutSeconds}s`);
+    // AGY's print/stream-json mode defaults to a five-minute wait. An omitted
+    // flag therefore still imposes a provider-side timeout. `0s` is *not* an
+    // unlimited sentinel: AGY interprets it as zero polls and immediately
+    // returns `timeout waiting for response`. Use a long positive ceiling for
+    // unified turns and keep the legacy caller's explicit timeout unchanged.
+    const printTimeout = this.timeoutSeconds > 0 ? `${this.timeoutSeconds}s` : resolveAntigravityPrintTimeout();
+    args.splice(args.indexOf("--log-file"), 0, "--print-timeout", printTimeout);
     if (shouldPassAntigravityEffort(model)) args.push("--effort", this.effort);
     if (model) args.push("--model", model);
     if (resumeConversationId) args.push("--conversation", resumeConversationId);
@@ -269,6 +303,7 @@ export class AntigravitySession {
       resumedConversation: Boolean(resumeConversationId),
       historyMessageCount: this.conversationHistory.length,
       cwd: this.runtime.root,
+      printTimeout,
       mcpConfigPath: this.runtime.mcpMount?.configPath ?? "",
       mcpServerName: this.runtime.mcpMount?.serverName ?? "",
       mcpScope: this.runtime.mcpMount?.scope ?? "",
@@ -304,6 +339,8 @@ export class AntigravitySession {
         textEmitted: false,
         resultReceived: false,
         seenToolCalls: new Set<string>(),
+        softPolicyViolationCalls: new Set<string>(),
+        imageLookupToolSeen: false,
       };
       this.pending = pending;
       context.state = "awaiting_result";
@@ -546,6 +583,27 @@ export class AntigravitySession {
     if (!step) return;
     const toolInvocation = extractAntigravityToolInvocation(step, pending.seenToolCalls);
     if (toolInvocation) {
+      const normalizedTool = toolInvocation.toolName.trim().toLowerCase();
+      const isImageLookupTool = normalizedTool === "identify_image" || normalizedTool === "search_web" || normalizedTool === "searchweb";
+      const afterImageLookup = pending.imageLookupToolSeen;
+      // Unified mode intentionally keeps AGY's native permissions. For turns
+      // with staged images, record a soft-policy violation instead of
+      // rejecting the tool. This is telemetry-only and never interrupts the
+      // user's turn.
+      if (pending.allowedReadPaths.length > 0 && !pending.softPolicyViolationCalls.has(toolInvocation.callId)) {
+        const policyError = imageLookupSoftPolicyViolation(step, pending.allowedReadPaths);
+        if (policyError) {
+          pending.softPolicyViolationCalls.add(toolInvocation.callId);
+          this.logLifecycle(pending.context, "image_soft_policy_violation", {
+            turnId: pending.id,
+            tool: toolInvocation.toolName,
+            callId: toolInvocation.callId,
+            afterImageLookup,
+            violation: policyError,
+          });
+        }
+      }
+      if (isImageLookupTool) pending.imageLookupToolSeen = true;
       if (toolInvocation.state === "completed" || !pending.seenToolCalls.has(toolInvocation.callId)) {
         if (toolInvocation.state !== "completed") pending.seenToolCalls.add(toolInvocation.callId);
         this.emitToolStream(pending, toolInvocation);
@@ -777,7 +835,7 @@ export function shouldPassAntigravityEffort(model?: string): boolean {
   if (!model) return true;
   // Stable model slugs use a trailing reasoning tier (for example
   // `gemini-3.7-flash-high` and `gemini-3.7-flash-medium`).
-  return !/(?:^|[-_])(?:low|medium|high)$/i.test(model.trim());
+  return !/(?:^|[-_])(?:low|medium|med|high)$/i.test(model.trim());
 }
 
 function looksLikeStructuredOutput(value: string): boolean {
@@ -958,6 +1016,18 @@ export function coordinatorStepPolicyViolation(step: any, allowedReadPaths: read
     if (!allowed) return "Antigravity manager requested view_file outside the current managed image set";
   }
   return undefined;
+}
+
+/**
+ * Returns the legacy coordinator policy result for image-turn telemetry.
+ * `identify_image` is a safe IlMatto MCP tool and therefore does not count as
+ * a violation, while all other checks reuse the canonical policy logic. This
+ * function never blocks execution.
+ */
+export function imageLookupSoftPolicyViolation(step: any, allowedReadPaths: readonly string[] = []): string | undefined {
+  const rawToolName = step?.tool_name ?? step?.tool_info?.name ?? step?.tool_info?.tool_name ?? step?.tool_call?.name;
+  if (typeof rawToolName === "string" && rawToolName.trim().toLowerCase() === "identify_image") return undefined;
+  return coordinatorStepPolicyViolation(step, allowedReadPaths);
 }
 
 function isBrowserSubagent(step: any): boolean {

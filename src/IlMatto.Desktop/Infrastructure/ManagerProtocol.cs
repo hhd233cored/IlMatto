@@ -62,10 +62,17 @@ public sealed record StartManagerSessionMessage(
     [property: JsonPropertyName("executorProfiles")] Dictionary<string, ManagerCodingAgentConfig>? ExecutorProfiles = null,
     [property: JsonPropertyName("type")] string Type = "start_manager_session");
 
-public sealed record SendManagerMessage(string SessionId, string Text, IReadOnlyList<ManagerImageAttachmentMessage>? Attachments = null, string? Executor = null, [property: JsonPropertyName("draftId")] string? DraftId = null, [property: JsonPropertyName("type")] string Type = "send_manager_message");
+public sealed record ActivateManagerSessionMessage(
+    string SessionId,
+    [property: JsonPropertyName("type")] string Type = "activate_manager_session");
+
+public sealed record SendManagerMessage(string SessionId, string Text, IReadOnlyList<ManagerImageAttachmentMessage>? Attachments = null, string? Executor = null, [property: JsonPropertyName("draftId")] string? DraftId = null, [property: JsonPropertyName("generateTitle")] bool GenerateTitle = false, [property: JsonPropertyName("type")] string Type = "send_manager_message");
 public sealed record ApproveCodingToolMessage(string SessionId, string CallId, bool Approved, [property: JsonPropertyName("type")] string Type = "approve_coding_tool");
 public sealed record ResolveCodingInteractionMessage(string SessionId, string RequestId, bool Approved, Dictionary<string, object?>? Values = null, [property: JsonPropertyName("type")] string Type = "resolve_coding_interaction");
-public sealed record CancelManagerTurnMessage(string SessionId, [property: JsonPropertyName("type")] string Type = "cancel_manager_turn");
+public sealed record CancelManagerTurnMessage(
+    string SessionId,
+    [property: JsonPropertyName("target")] string Target = "all",
+    [property: JsonPropertyName("type")] string Type = "cancel_manager_turn");
 public sealed record RequestVerificationMessage(string SessionId, string TaskId, [property: JsonPropertyName("type")] string Type = "request_verification");
 public sealed record ProbeCodexMessage(string SessionId, string Executable, string WorkspacePath, [property: JsonPropertyName("type")] string Type = "probe_codex");
 public sealed record StartCodexLoginMessage(string SessionId, string Executable, string WorkspacePath, [property: JsonPropertyName("type")] string Type = "start_codex_login");
@@ -92,6 +99,10 @@ public sealed class ManagerHostEvent
     [JsonPropertyName("workspacePath")] public string? WorkspacePath { get; init; }
     [JsonPropertyName("expiresAt")] public string? ExpiresAt { get; init; }
     [JsonPropertyName("state")] public string? State { get; init; }
+    [JsonPropertyName("turnId")] public string? TurnId { get; init; }
+    [JsonPropertyName("startedAt")] public string? StartedAt { get; init; }
+    [JsonPropertyName("completedAt")] public string? CompletedAt { get; init; }
+    [JsonPropertyName("durationMs")] public long? DurationMs { get; init; }
     [JsonPropertyName("status")] public string? Status { get; init; }
     [JsonPropertyName("action")] public string? Action { get; init; }
     [JsonPropertyName("final")] public bool? Final { get; init; }

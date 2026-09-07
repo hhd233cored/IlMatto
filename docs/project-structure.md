@@ -2,9 +2,9 @@
 
 ## 1. 项目定位
 
-IlMatto 是运行在 Windows 开发机上的 WPF Agent。桌面端提供交互界面和本地状态管理；ManagerHost 维护一个统一的 Antigravity CLI 会话，同时处理陪伴对话、项目分析、文件修改、命令执行和测试。
+IlMatto 是运行在 Windows 开发机上的 WPF Agent。桌面端提供交互界面和本地状态管理；ManagerHost 为每个 Manager 会话维护独立的 Antigravity CLI 上下文，同时处理陪伴对话、项目分析、文件修改、命令执行和测试。
 
-当前代码是单工作区、单活动 Antigravity 会话的 MVP。系统支持两种入口：
+当前代码支持多工作区、多活动会话并行运行。系统支持两种入口：
 
 - Manager 界面：默认启动，使用一个同时承担聊天和编码的 Antigravity Agent。
 - Pi Coding 工作台：保留原有的独立 Pi 编码界面，可从 Manager 的“视图”菜单打开。
@@ -38,25 +38,27 @@ IlMatto/
                 ▼                           ▼
 ┌───────────────────────────┐   ┌─────────────────────────────┐
 │ IlMatto.ManagerHost        │   │ IlMatto.AgentHost             │
-│ ManagerSession             │   │ AgentSession                  │
-│ Unified AGY text session   │   │ Pi Coding Agent + 本地工具    │
+│ SessionRegistry             │   │ AgentSession                  │
+│ WorkspaceLock + limiter     │   │ Pi Coding Agent + 本地工具    │
+│ 每会话 Unified AGY/Codex    │   │                              │
 └───────────────┬───────────┘   └──────────────┬──────────────┘
                 │                              │
                 └─ Antigravity CLI（同一进程，完整权限）
                    stream-json ↔ 工作区文件/命令/MCP
 ```
 
-可选 Codex 观察路径：
+可选 Agent Tools 路径：
 
 ```text
-Antigravity ──只读 MCP Facade──> ManagerHost ──(用户确认后)──> Codex App Server
+Antigravity ──只读 MCP Facade──> ManagerHost ──┬─(用户确认后)──> Codex App Server
+                                              └─(受管图片)──> Google Vision Web Detection
 ```
 
-MCP Facade 只允许生成待确认草稿和读取状态/报告；Codex 的控制接口仅存在于
-ManagerHost 内部。ManagerHost 会把带有当前管道名和会话 ID 的 Facade 条目临时写入
+MCP Facade 只允许生成待确认草稿和读取状态/报告；图片识别后端暂时保留但当前未向 Agent 暴露。Codex 的控制接口仅存在于
+ManagerHost 内部。ManagerHost 会把带有当前管道名和会话 ID 的 `ilmatto-agent-tools-*` 条目临时写入
 Antigravity 用户级全局 `%USERPROFILE%/.gemini/config/mcp_config.json`，保留已有
 Server；会话结束时清理自身且未被修改的条目。Codex 事件和线程 ID 不发送给
-Antigravity。
+Antigravity。`identify_image` 在 MCP 工具列表中作为只读工具提供，只接受当前回合受管图片的附件 ID，不接受任意本地路径或 URL，并向 Agent 返回经过裁剪的候选实体、未归一化相关性分数和有限匹配数量，不返回网页或图片 URL，结果按图片哈希缓存。
 
 ### 3.1 桌面端与 Host 的边界
 
@@ -74,7 +76,7 @@ Antigravity。
 | `App.xaml` / `App.xaml.cs` | WPF 应用入口、全局资源、未处理异常捕获和启动日志。默认创建 `ManagerWindow`。 |
 | `ManagerWindow.xaml` / `.xaml.cs` | Manager 主界面：对话历史、聊天区、审批区、输入区、Agent 过程和设置入口。 |
 | `ManagerViewModel.cs` | Manager 对话生命周期、Named Pipe 事件分发、统一 Antigravity 状态迁移和兼容旧版时间线展示。 |
-| `ManagerSettingsWindow.xaml` / `.xaml.cs` | 兼容旧配置字段的设置窗口；统一 Manager 当前只使用 Antigravity 和工作区/陪伴资料。 |
+| `ManagerSettingsWindow.xaml` / `.xaml.cs` | 兼容旧配置字段的设置窗口；维护角色名称、角色卡、Antigravity 和工作区默认值。 |
 | `MainWindow.xaml` / `.xaml.cs` | 独立 Pi Coding 工作台。 |
 | `MainViewModel.cs` | Pi 交互会话、工具审批、Slash Command、过程记录、上下文指标和 Git 面板。 |
 | `SettingsWindow.xaml` / `.xaml.cs` | 独立 Pi 工作台设置。 |
@@ -85,6 +87,7 @@ Antigravity。
 UI 使用的状态模型和展示模型：
 
 - `ManagerConversationItem` / `ManagerChatEntry`：Manager 对话、消息、Provider 绑定和 Coding Agent 结果。
+- `RoleCardComposer`：将设置中的角色名称插入角色卡，并兼容读取旧的未带名称角色卡。
 - `ConversationItem` / `ChatEntry`：独立 Pi 工作台的对话和消息。
 - `ChatSegment` / `ProcessItem`：将文本、思路和工具操作保存在同一条时间线中，并支持折叠。
 - `ApprovalRequest`：旧版命令/文件审批和交互请求模型；统一 Antigravity 的工具授权由 CLI 自身处理。
@@ -107,6 +110,7 @@ UI 使用的状态模型和展示模型：
 | `SettingsStore.cs` | 全局配置的 JSON 读写。 |
 | `ConversationStore.cs` | 独立 Pi 对话、过程记录和会话快照的读写。 |
 | `ManagerConversationStore.cs` | Manager 对话、Provider 绑定和结构化结果的读写及旧格式迁移。 |
+| `ManagerSessionDataStore.cs` | 删除指定 Manager 会话的 IlMatto 本地记忆与附件副本；保留全局画像和 Antigravity CLI 历史。 |
 | `CredentialStore.cs` | 使用 Windows Credential Manager 保存、读取和删除 API Key。 |
 
 ### 4.4 `Controls/`
@@ -120,16 +124,19 @@ ManagerHost 是独立的 TypeScript/Node.js 进程。它只维护一个活动的
 | 文件 | 职责 |
 | --- | --- |
 | `src/index.ts` | Named Pipe Server、统一 ManagerSession 生命周期、文本/工具事件转发和删除/关闭处理。 |
-| `src/companion.ts` | CompanionProfile 默认值、角色系统提示词和陪伴上下文规范化。 |
+| `src/companion.ts` | 角色卡、全局用户画像、当前会话摘要和记忆工具规则的 prompt 组装；不维护关系数值。 |
+| `src/companion-memory.ts` | 应用本地 `profile.md`、会话 `summary.json`/`transcript.jsonl` 的读写、合并、去重、关键词检索和片段裁剪。 |
 | `src/protocol.ts` | ManagerHost 与桌面端的兼容协议和图片附件校验。 |
 | `src/runtime.ts` | 统一会话的日志/附件运行目录；不再生成 Agent、Schema 或全局权限文件。 |
 | `src/antigravity.ts` | Antigravity CLI 探测、Headless 文本流和工具事件解析。 |
+| `src/antigravity-probe-cache.ts` | 按 CLI 路径共享 `agy --version`/`agy models` 探测 Promise 和结果；首次探测后台执行，避免会话切换同步等待。 |
 | `src/antigravity-sdk.ts` | 启动 Python SDK Bridge、转发 NDJSON、接收流式文本/状态/结构化结果，并管理 SDK 会话目录。 |
 | `src/antigravity-interactive.ts` | 通过桌面反向协议驱动隐藏交互式 CLI，解析终端输出并校验 ManagerAction。 |
 | `src/coordinator.ts` | 旧 API Coordinator 的兼容实现，仅供旧会话迁移测试使用，不是统一 Manager 的运行路径。 |
 | `src/codex-worker.ts` | Codex App Server 适配代码；结构化 Coding Worker 仅保留兼容测试，观察模式使用普通文本 Turn。 |
 | `src/codex-observation.ts` | Codex 草稿确认、单会话隐藏 thread、事件持久化、报告生成和工作区指纹。 |
-| `src/codex-mcp.ts` | 面向 Antigravity 的本地 MCP Facade，只暴露草稿和只读观察工具/资源。 |
+| `src/codex-mcp.ts` | 面向 Antigravity 的本地 IlMatto Agent Tools MCP Facade，提供只读 `identify_image`、Codex 观察，以及 `session_search`、`session_open`、`session_update`、`profile_update`。 |
+| `src/vision-web-detection.ts` | Google Cloud Vision Web Detection REST 客户端、认证、结果裁剪、证据等级、缓存和限流。 |
 | `src/*.test.ts` | Antigravity 文本流、单进程生命周期、协议兼容和 Host 集成测试。 |
 
 ### 5.1.1 Antigravity CLI 通道
@@ -145,7 +152,7 @@ SDK 会话仍可由旧快照恢复；旧快照缺少 `transport` 时按 CLI 处�
 ### 5.1 ManagerHost 的运行方式
 
 1. 所有消息直接进入同一个 Antigravity CLI 上下文，不再经过主 Agent/Coding Worker 委派。
-2. Antigravity 使用 `--mode accept-edits` 与 `--dangerously-skip-permissions`，自行决定工具和命令。
+2. Antigravity 使用 `--mode accept-edits` 与 `--dangerously-skip-permissions`，自行决定工具和命令；统一流式会话另外显式传入正的长等待值（默认 `--print-timeout 24h`，可由 `ILMATTO_AGY_PRINT_TIMEOUT` 覆盖），避免 CLI 默认的五分钟等待上限。`0s` 不是无限等待值，而是立即超时，因此被拒绝。
 3. Host 只转发文本、思考、工具状态和错误，不解析强制 JSON，也不拦截工具。
 4. Codex 观察通道默认不启动；用户确认 Antigravity 生成的草稿后，ManagerHost 才启动普通文本 Codex App Server Turn。
 5. Antigravity 只能按需读取 Codex 摘要报告，不能提交、继续、steer 或中断 Codex。
@@ -176,17 +183,23 @@ AgentHost 是独立的 TypeScript/Node.js 进程，底层使用 `@mariozechner/p
 
 | 数据 | 默认位置 | 内容 |
 | --- | --- | --- |
-| 全局设置 | `%LocalAppData%\\IlMatto\\settings.json` | Provider 默认值、模型、工作区、超时和自动批准开关。 |
+| 全局设置 | `%LocalAppData%\\IlMatto\\settings.json` | Provider 默认值、模型、推理强度、沙箱/审批选择、工作区、超时和自动批准开关。 |
 | 独立 Pi 对话索引 | `%LocalAppData%\\IlMatto\\conversations.json` | Pi 工作台的历史消息、过程记录和关联会话文件。 |
 | Pi Provider 会话 | `%LocalAppData%\\IlMatto\\sessions\\*.jsonl` | Pi 的持久会话记录。AgentHost 会校验路径和工作区匹配关系。 |
-| Manager 对话索引 | `%LocalAppData%\\IlMatto\\manager-sessions\\conversations.json` | Manager 对话、完整 Provider 绑定快照和结构化 Coding 结果。 |
+| Manager 对话索引 | `%LocalAppData%\\IlMatto\\manager-sessions\\conversations.json` | Manager 对话、Provider 绑定快照和结构化 Coding 结果；新快照只保存角色卡。 |
+| Companion 用户画像 | `%LocalAppData%\\IlMatto\\companion-memory\\profile.md` | 跨 Manager 会话共享、可直接编辑的用户画像文本，最多 8,000 字符。 |
+| Companion 会话摘要 | `%LocalAppData%\\IlMatto\\companion-memory\\sessions\\<sessionId>\\summary.json` | 事实性会话摘要、重要事件、未完成事项和关键词，摘要最多 6,000 字符。 |
+| Companion 可见 transcript | `%LocalAppData%\\IlMatto\\companion-memory\\sessions\\<sessionId>\\transcript.jsonl` | 摘要命中后用于返回有限原文片段的用户/助手可见文本；不含思路和工具输出。 |
 | API Manager 会话（旧兼容） | `%LocalAppData%\\IlMatto\\manager-sessions\\coordinator\\*.jsonl` | 仅供旧快照/兼容测试读取；统一 Manager 不写入。 |
 | Antigravity SDK 会话 | `%LocalAppData%\\IlMatto\\manager-sessions\\antigravity-sdk\\<sessionRef>` | SDK 会话持久化目录；只保存 SDK 所需的会话状态。 |
 | Manager 图片附件 | `%LocalAppData%\\IlMatto\\manager-runtime\\attachments\\<sessionId>` | 发送前复制的图片，供统一 Antigravity 会话读取；每条消息最多 8 张、单张 20 MiB、总计 64 MiB。 |
 | Manager 运行时 | `%LocalAppData%\\IlMatto\\manager-runtime` | 临时附件目录和配置；统一路径不生成 Agent、Schema 或全局权限文件。 |
-| 全局 MCP 配置 | `%USERPROFILE%\\.gemini\\config\\mcp_config.json` | Manager 会话临时写入 `ilmatto-codex-observation`，保留用户已有 Server；正常关闭后只清理自身且未被修改的条目。 |
+| 全局 MCP 配置 | `%USERPROFILE%\\.gemini\\config\\mcp_config.json` | Manager 会话临时写入 `ilmatto-agent-tools-<session-hash>`，保留用户已有 Server；正常关闭后只清理自身且未被修改的条目。 |
+| Web Detection 缓存 | `%LocalAppData%\\IlMatto\\vision-cache` | 以图片 SHA-256 保存 24 小时的裁剪结果，不保存 Base64 或 Google 原始响应。 |
 | Manager 日志 | `%LocalAppData%\\IlMatto\\logs\\antigravity-manager-<workspace>.log` | Antigravity Manager 运行日志。 |
 | API Key | Windows Credential Manager | 只在 JSON 中保存 Credential ID，不保存 API Key 本身。 |
+
+删除 Manager 会话时，只删除带有该 `sessionId` 的会话级数据：`companion-memory\sessions\<sessionId>`、`manager-sessions\attachments\<sessionId>`、`manager-runtime\attachments\<sessionId>`、任务追踪、Codex 观察数据和 IlMatto 管理的 Provider 本地会话文件。全局 `companion-memory\profile.md`、用户已有的 MCP 配置以及 Antigravity CLI 历史会话不在删除范围内。
 
 ## 8. 构建关系
 
@@ -198,11 +211,12 @@ AgentHost 是独立的 TypeScript/Node.js 进程，底层使用 `@mariozechner/p
 ## 9. 测试边界
 
 - AgentHost：协议、路径安全、工具审批、Provider 配置、Git 服务和 Named Pipe 集成。
-- ManagerHost：统一 Antigravity 文本流、图片暂存、兼容协议、工作区 MCP 挂载和 Named Pipe 集成；旧 API/Codex 适配代码不在新会话运行路径。
+- ManagerHost：统一 Antigravity 文本流、图片暂存、兼容协议、Agent Tools MCP 挂载、陪伴记忆存储、Web Detection 和 Named Pipe 集成；旧 API/Codex 适配代码不在普通对话运行路径。
+- Companion memory：覆盖画像初始化与更新、摘要补丁合并、关键词搜索、摘要命中后的有限片段返回、文件损坏/不可用降级和会话路径隔离。
 - Desktop：当前没有独立的测试项目；行为主要由 ViewModel、协议模型和 Host 集成覆盖。
 
 ## 10. 当前结构限制
 
 - 当前只允许一个 Manager 活动会话和一个 Antigravity CLI 进程。
 - 工作区是本地目录，系统没有 Git 远端同步、安装包或自动更新流程。
-- IlMatto 不提供独立的全局 MCP 配置管理界面；Codex 观察 Facade 由 ManagerHost 在会话期间挂载到 Antigravity 全局 MCP 配置，失败时保持可选通道停用。旧工作区插件挂载仅作为兼容 fallback。
+- IlMatto 不提供独立的全局 MCP 配置管理界面；Agent Tools Facade 由 ManagerHost 在会话期间挂载到 Antigravity 全局 MCP 配置，失败时保持可选通道停用。旧工作区插件挂载仅作为兼容 fallback，Google 凭据缺失时只停用 Web Detection。

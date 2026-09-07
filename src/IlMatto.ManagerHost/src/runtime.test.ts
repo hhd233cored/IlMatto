@@ -3,7 +3,7 @@ import { test } from "node:test";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { buildCompanionWebPermissionRules, buildManagerPermissionRules, cleanupManagerRuntime, ensureManagerRuntime, ensureUnifiedManagerRuntime, managerActionSchema } from "./runtime.js";
+import { buildCompanionWebPermissionRules, buildManagerPermissionRules, cleanupManagerRuntime, cleanupManagerSessionData, ensureManagerRuntime, ensureUnifiedManagerRuntime, managerActionSchema } from "./runtime.js";
 
 test("unified manager runtime uses the selected workspace without generating an AGY agent", async () => {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-workspace-"));
@@ -39,6 +39,47 @@ test("unified manager runtime uses the selected workspace without generating an 
   }
 });
 
+test("session cleanup removes owned memory and attachment copies but not the shared profile", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "ilmatto-session-cleanup-workspace-"));
+  const runtimeRoot = await mkdtemp(path.join(os.tmpdir(), "ilmatto-session-cleanup-runtime-"));
+  const localAppData = await mkdtemp(path.join(os.tmpdir(), "ilmatto-session-cleanup-local-"));
+  const memoryRoot = path.join(localAppData, "memory");
+  const sessionId = "cleanup-session";
+  const previousRuntime = process.env.ILMATTO_MANAGER_RUNTIME;
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const previousMemory = process.env.ILMATTO_COMPANION_MEMORY_DIR;
+  process.env.ILMATTO_MANAGER_RUNTIME = runtimeRoot;
+  process.env.LOCALAPPDATA = localAppData;
+  process.env.ILMATTO_COMPANION_MEMORY_DIR = memoryRoot;
+  try {
+    const runtime = await ensureUnifiedManagerRuntime(workspace);
+    const profilePath = path.join(memoryRoot, "profile.md");
+    const memorySession = path.join(memoryRoot, "sessions", sessionId);
+    const managedAttachments = path.join(localAppData, "IlMatto", "manager-sessions", "attachments", sessionId);
+    const runtimeAttachments = path.join(runtime.attachmentsRoot, sessionId);
+    await mkdir(memorySession, { recursive: true });
+    await mkdir(managedAttachments, { recursive: true });
+    await mkdir(runtimeAttachments, { recursive: true });
+    await writeFile(profilePath, "# 用户画像\n", "utf8");
+    await writeFile(path.join(memorySession, "summary.json"), "{}", "utf8");
+    await writeFile(path.join(managedAttachments, "image.png"), "managed", "utf8");
+    await writeFile(path.join(runtimeAttachments, "image.png"), "runtime", "utf8");
+
+    await cleanupManagerSessionData(runtime, sessionId);
+    await assert.rejects(stat(memorySession));
+    await assert.rejects(stat(managedAttachments));
+    await assert.rejects(stat(runtimeAttachments));
+    assert.equal(await readFile(profilePath, "utf8"), "# 用户画像\n");
+  } finally {
+    if (previousRuntime === undefined) delete process.env.ILMATTO_MANAGER_RUNTIME; else process.env.ILMATTO_MANAGER_RUNTIME = previousRuntime;
+    if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = previousLocalAppData;
+    if (previousMemory === undefined) delete process.env.ILMATTO_COMPANION_MEMORY_DIR; else process.env.ILMATTO_COMPANION_MEMORY_DIR = previousMemory;
+    await rm(workspace, { recursive: true, force: true });
+    await rm(runtimeRoot, { recursive: true, force: true });
+    await rm(localAppData, { recursive: true, force: true });
+  }
+});
+
 test("unified runtime mounts the Codex MCP in the global Antigravity config", async () => {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-global-mcp-workspace-"));
   const runtimeRoot = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-global-mcp-runtime-"));
@@ -52,7 +93,7 @@ test("unified runtime mounts the Codex MCP in the global Antigravity config", as
     assert.ok(runtime.mcpMount);
     assert.equal(runtime.mcpMount!.scope, "global");
     assert.equal(runtime.mcpMount!.configPath, path.resolve(globalConfigPath));
-    assert.equal(runtime.mcpMount!.serverName, "ilmatto-codex-observation");
+    assert.match(runtime.mcpMount!.serverName, /^ilmatto-agent-tools-[a-f0-9]{12}$/);
     await assert.rejects(stat(path.join(workspace, ".agents")));
     const mounted = JSON.parse(await readFile(globalConfigPath, "utf8"));
     assert.deepEqual(mounted.mcpServers.unityMCP, { serverUrl: "http://127.0.0.1:8080/mcp", type: "http" });
@@ -67,6 +108,30 @@ test("unified runtime mounts the Codex MCP in the global Antigravity config", as
     const restartedConfig = JSON.parse(await readFile(globalConfigPath, "utf8"));
     assert.deepEqual(restartedConfig.mcpServers[restarted.mcpMount!.serverName].args.slice(-4), ["--pipe", "global-test-restarted", "--session-id", "session-global"]);
     await cleanupManagerRuntime(restarted);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test("global Agent Tools mount removes only a generated legacy Codex entry", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-legacy-global-workspace-"));
+  const runtimeRoot = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-legacy-global-runtime-"));
+  const globalConfigPath = path.join(runtimeRoot, "mcp_config.json");
+  try {
+    await mkdir(path.dirname(globalConfigPath), { recursive: true });
+    await writeFile(globalConfigPath, JSON.stringify({ mcpServers: {
+      "ilmatto-codex-observation": { command: process.execPath, args: [process.execPath, "--pipe", "old", "--session-id", "old-session"] },
+      userLegacy: { command: "user-mcp" },
+    } }), "utf8");
+    const runtime = await ensureUnifiedManagerRuntime(workspace, undefined, {
+      mcp: { command: process.execPath, scriptPath: process.execPath, pipeName: "new", sessionId: "session-1", configPath: globalConfigPath },
+    });
+    const mounted = JSON.parse(await readFile(globalConfigPath, "utf8"));
+    assert.equal(mounted.mcpServers["ilmatto-codex-observation"], undefined);
+    assert.deepEqual(mounted.mcpServers.userLegacy, { command: "user-mcp" });
+    assert.ok(mounted.mcpServers[runtime.mcpMount!.serverName]);
+    await cleanupManagerRuntime(runtime);
   } finally {
     await rm(workspace, { recursive: true, force: true });
     await rm(runtimeRoot, { recursive: true, force: true });
@@ -209,9 +274,9 @@ test("invalid workspace MCP plugin config disables the optional mount without br
     // path that the mount will use by deriving it from the same inputs.
     const { createHash } = await import("node:crypto");
     const sessionKey = createHash("sha256").update(`${path.resolve(workspace)}\nsession-1`, "utf8").digest("hex").slice(0, 12);
-    const generatedDirectory = path.join(workspace, ".agents", "plugins", `ilmatto-codex-observation-${sessionKey}`);
+    const generatedDirectory = path.join(workspace, ".agents", "plugins", `ilmatto-agent-tools-${sessionKey}`);
     await mkdir(generatedDirectory, { recursive: true });
-    await writeFile(path.join(generatedDirectory, "plugin.json"), JSON.stringify({ name: `ilmatto-codex-observation-${sessionKey}` }), "utf8");
+    await writeFile(path.join(generatedDirectory, "plugin.json"), JSON.stringify({ name: `ilmatto-agent-tools-${sessionKey}` }), "utf8");
     await writeFile(path.join(generatedDirectory, "mcp_config.json"), JSON.stringify({ mcpServers: [] }), "utf8");
     const runtime = await ensureUnifiedManagerRuntime(workspace, undefined, {
       mcp: { command: process.execPath, scriptPath: process.execPath, pipeName: "test-pipe", sessionId: "session-1", scope: "workspace-plugin" },

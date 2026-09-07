@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { spawn } from "node:child_process";
 import net from "node:net";
 
-test("Codex MCP exposes only draft and observation tools", async () => {
+test("IlMatto Agent Tools MCP exposes Codex, image lookup, and companion memory tools", async () => {
   const pipeName = `IlMatto-codex-mcp-test-${process.pid}-${Date.now()}`;
   const pipePath = `\\\\.\\pipe\\${pipeName}`;
   const server = net.createServer((socket) => { socket.setEncoding("utf8"); });
@@ -22,8 +22,18 @@ test("Codex MCP exposes only draft and observation tools", async () => {
       return line ? JSON.parse(line).result.tools : undefined;
     });
     const names = tools.map((tool: any) => tool.name);
-    assert.deepEqual(names, ["draft_codex_task", "get_codex_status", "get_latest_codex_report", "get_codex_report", "get_codex_diff"]);
+    assert.deepEqual(names, ["draft_codex_task", "get_codex_status", "get_latest_codex_report", "get_codex_report", "get_codex_diff", "identify_image", "session_search", "session_open", "session_update", "profile_update"]);
+    const identifyImage = tools.find((tool: any) => tool.name === "identify_image");
+    assert.deepEqual(identifyImage.inputSchema.required, ["attachment_id"]);
     assert.equal(names.some((name: string) => ["submit_codex_task", "confirm_codex_task", "continue_codex_task", "steer_codex_task", "interrupt_codex_task"].includes(name)), false);
+    const sessionSearch = tools.find((tool: any) => tool.name === "session_search");
+    assert.deepEqual(sessionSearch.inputSchema.required, ["query"]);
+    const sessionOpen = tools.find((tool: any) => tool.name === "session_open");
+    assert.deepEqual(sessionOpen.inputSchema.required, ["session_id", "query"]);
+    const sessionUpdate = tools.find((tool: any) => tool.name === "session_update");
+    assert.deepEqual(sessionUpdate.inputSchema.required, ["patch"]);
+    const profileUpdate = tools.find((tool: any) => tool.name === "profile_update");
+    assert.deepEqual(profileUpdate.inputSchema.required, ["patch"]);
   } finally {
     child.stdin.end();
     if (child.exitCode === null) await new Promise<void>((resolve) => { const timer = setTimeout(() => { try { child.kill(); } catch { } resolve(); }, 2_000); child.once("exit", () => { clearTimeout(timer); resolve(); }); });

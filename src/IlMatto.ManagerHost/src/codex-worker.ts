@@ -21,6 +21,11 @@ export type CodexWorkerSettings = {
 
 type PendingRpc = { resolve: (value: any) => void; reject: (error: Error) => void; timer?: NodeJS.Timeout };
 const NO_CODEX_TIMEOUT_MS = 0;
+// A task turn is intentionally unbounded, but the initial App Server
+// handshake is a transport operation.  Keep a finite guard here so a CLI
+// that starts successfully but never answers initialize/thread/start cannot
+// occupy a session forever.
+const CODEX_STARTUP_TIMEOUT_MS = 30_000;
 type ServerRequest = { id: string | number; method: string; params: any };
 
 const workerInstruction = `You are the IlMatto coding specialist. Make all technical and implementation decisions yourself.
@@ -64,6 +69,7 @@ export class CodexAppServerBridge implements CodingWorker {
   private sandboxMode: CodexSandboxMode;
   private autoApproveRequests = false;
   private turnAutoApproveRequests = false;
+  private cancelRequested = false;
   private readonly observationMode: boolean;
   private readonly spawnProcess: typeof spawn;
 
@@ -103,13 +109,13 @@ export class CodexAppServerBridge implements CodingWorker {
     await this.request("initialize", {
       clientInfo: { name: "ilmatto", title: "IlMatto", version: "0.2.0" },
       capabilities: { experimentalApi: true, requestAttestation: false },
-    }, NO_CODEX_TIMEOUT_MS);
+    }, CODEX_STARTUP_TIMEOUT_MS);
     this.notify("initialized", {});
-    const account = await this.request("account/read", { refreshToken: false }, NO_CODEX_TIMEOUT_MS);
+    const account = await this.request("account/read", { refreshToken: false }, CODEX_STARTUP_TIMEOUT_MS);
     if (account?.requiresOpenaiAuth === true && !account?.account) throw new CodexWorkerError("CODEX_AUTH_REQUIRED", "Codex CLI 尚未登录。请在设置中登录 Codex 后重试。");
     let policy: string | undefined;
     try {
-      const requirements = await this.request("configRequirements/read", {}, NO_CODEX_TIMEOUT_MS);
+      const requirements = await this.request("configRequirements/read", {}, CODEX_STARTUP_TIMEOUT_MS);
       policy = requirements?.requirements ? JSON.stringify(requirements.requirements) : undefined;
     } catch { policy = undefined; }
     const policyLabel = [policy, `approvalPolicy=${this.approvalPolicy}`].filter(Boolean).join(" · ");
@@ -122,7 +128,7 @@ export class CodexAppServerBridge implements CodingWorker {
         sandbox: appServerSandboxMode(this.sandboxMode),
       };
       if (this.settings.model?.trim()) resumeParams.model = this.settings.model.trim();
-      try { await this.requestWithApprovalFallback("thread/resume", resumeParams, NO_CODEX_TIMEOUT_MS); }
+      try { await this.requestWithApprovalFallback("thread/resume", resumeParams, CODEX_STARTUP_TIMEOUT_MS); }
       catch (error) { throw new CodexWorkerError("CODEX_THREAD_RESUME_FAILED", error instanceof Error ? error.message : "Codex thread 恢复失败。"); }
     } else {
       const params: Record<string, unknown> = {
@@ -132,7 +138,7 @@ export class CodexAppServerBridge implements CodingWorker {
         serviceName: "ilmatto",
       };
       if (this.settings.model?.trim()) params.model = this.settings.model.trim();
-      const started = await this.requestWithApprovalFallback("thread/start", params, NO_CODEX_TIMEOUT_MS);
+      const started = await this.requestWithApprovalFallback("thread/start", params, CODEX_STARTUP_TIMEOUT_MS);
       this.threadId = started?.thread?.id ?? started?.thread?.sessionId;
       if (!this.threadId) throw new CodexWorkerError("CODEX_PROTOCOL_ERROR", "Codex thread/start 没有返回 thread ID。");
     }
@@ -143,6 +149,7 @@ export class CodexAppServerBridge implements CodingWorker {
   sendCodeTask(taskId: string, userRequest: string, attachments: ManagerImageAttachment[] = []): void {
     if (!this.started || !this.threadId) throw new CodexWorkerError("CODEX_PROTOCOL_ERROR", "Codex App Server 尚未启动。");
     if (this.turnId) throw new CodexWorkerError("BUSY", "Codex Coding Agent 正在运行另一个任务。");
+    this.cancelRequested = false;
     this.taskId = taskId;
     // Capture the selected policies in the turn request. Changing either
     // selector while a turn is running must not silently alter that turn.
@@ -169,6 +176,7 @@ export class CodexAppServerBridge implements CodingWorker {
       // A very fast App Server can emit turn/completed before the response to
       // turn/start resolves. Do not resurrect a completed turn in that case.
       if (this.taskId === taskId) this.turnId = result?.turn?.id ?? this.turnId;
+      if (this.taskId === taskId && this.cancelRequested) this.cancel();
     }).catch((error) => this.failTurn(error));
   }
 
@@ -180,6 +188,7 @@ export class CodexAppServerBridge implements CodingWorker {
   }
 
   cancel(): void {
+    this.cancelRequested = true;
     if (this.threadId && this.turnId && this.child?.stdin.writable) {
       void this.request("turn/interrupt", { threadId: this.threadId, turnId: this.turnId }, NO_CODEX_TIMEOUT_MS).catch(() => undefined);
     }
@@ -403,7 +412,7 @@ export class CodexAppServerBridge implements CodingWorker {
 
   private completeTurn(params: any): void {
     const taskId = this.taskId;
-    this.turnId = undefined; this.taskId = undefined; this.turnAutoApproveRequests = false;
+    this.turnId = undefined; this.taskId = undefined; this.turnAutoApproveRequests = false; this.cancelRequested = false;
     if (!taskId) return;
     const status = params?.turn?.status ?? params?.status;
     if (status === "interrupted" || status === "cancelled") {
@@ -432,7 +441,7 @@ export class CodexAppServerBridge implements CodingWorker {
   }
 
   private failTurn(error: unknown): void {
-    const taskId = this.taskId; this.taskId = undefined; this.turnId = undefined; this.turnAutoApproveRequests = false;
+    const taskId = this.taskId; this.taskId = undefined; this.turnId = undefined; this.turnAutoApproveRequests = false; this.cancelRequested = false;
     const code = error instanceof CodexWorkerError ? error.code : "CODEX_PROTOCOL_ERROR";
     const message = redact(error instanceof Error ? error.message : "Codex Coding Agent 失败。");
     this.onEvent({ type: "error", sessionId: this.settings.sessionId, code, message });

@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { isManagerClientMessage, isUnifiedAntigravityConfig, normalizeAntigravityModelId, normalizeManagerImageAttachments, normalizeStartConfig, parseCodexDirective, resolveAntigravityConversationId, validateCodeResult, validateManagerAction } from "./protocol.js";
 
 test("manager protocol validates strict routing messages", () => {
+  assert.equal(isManagerClientMessage({ type: "activate_manager_session", sessionId: "s" }), true);
+  assert.equal(isManagerClientMessage({ type: "activate_manager_session", sessionId: "" }), false);
   assert.equal(isManagerClientMessage({ type: "send_manager_message", sessionId: "s", text: "hello" }), true);
   assert.equal(isManagerClientMessage({ type: "send_manager_message", sessionId: "s", text: "@codex 修复测试", draftId: "draft-1" }), true);
   assert.equal(isManagerClientMessage({ type: "send_manager_message", sessionId: "s", text: "@codex 修复测试", draftId: "  " }), false);
@@ -99,6 +101,28 @@ test("manager protocol validates read-only Codex observation requests", () => {
   assert.equal(isManagerClientMessage({ type: "codex_observation_request", sessionId: "s", requestId: "r", operation: "get_codex_report", taskId: "task-1" }), true);
   assert.equal(isManagerClientMessage({ type: "codex_observation_request", sessionId: "s", requestId: "r", operation: "submit_codex_task", prompt: "不应存在" }), false);
   assert.equal(isManagerClientMessage({ type: "codex_observation_request", sessionId: "s", requestId: "r", operation: "get_codex_diff", taskId: "task-1", maxBytes: 2_000_001 }), false);
+});
+
+test("manager protocol accepts only the attachment-id based image tool request", () => {
+  assert.equal(isManagerClientMessage({ type: "agent_tool_request", sessionId: "s", requestId: "r", operation: "identify_image", attachmentId: "image-1", question: "这个角色是谁？" }), true);
+  assert.equal(isManagerClientMessage({ type: "agent_tool_request", sessionId: "s", requestId: "r", operation: "identify_image", attachmentId: "  " }), false);
+  assert.equal(isManagerClientMessage({ type: "agent_tool_request", sessionId: "s", requestId: "r", operation: "identify_image", path: "C:\\secrets\\image.png" }), false);
+  assert.equal(isManagerClientMessage({ type: "agent_tool_request", sessionId: "s", requestId: "r", operation: "read_file", attachmentId: "image-1" }), false);
+});
+
+test("manager protocol accepts companion memory patches on their matching operations", () => {
+  assert.equal(isManagerClientMessage({
+    type: "companion_memory_request", sessionId: "memory-session", requestId: "summary-1", operation: "session_update",
+    patch: { summaryPatch: "讨论了旧信件", keyEvents: ["讨论旧信件"] },
+  }), true);
+  assert.equal(isManagerClientMessage({
+    type: "companion_memory_request", sessionId: "memory-session", requestId: "profile-1", operation: "profile_update",
+    profilePatch: { section: "preferences", add: ["喜欢简洁回复"] },
+  }), true);
+  assert.equal(isManagerClientMessage({
+    type: "companion_memory_request", sessionId: "memory-session", requestId: "bad-1", operation: "session_update",
+    profilePatch: { section: "invalid", add: ["无效章节"] },
+  }), false);
 });
 
 test("unified Antigravity start messages use the compact validated shape", () => {

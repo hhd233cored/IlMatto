@@ -37,14 +37,16 @@ public partial class ManagerSettingsWindow : Window
         CodexPathBox.Text = viewModel.CodexCliPath;
         CodexModelBox.Text = viewModel.CodexModel;
         SelectTextItem(CodexEffortBox, viewModel.CodexEffort);
+        CompanionCharacterNameBox.Text = viewModel.CompanionCharacterName;
         CompanionCharacterPromptBox.Text = viewModel.CompanionCharacterPrompt;
-        CompanionUserProfileBox.Text = viewModel.CompanionUserProfile;
-        CompanionRelationshipSummaryBox.Text = viewModel.CompanionRelationshipSummary;
+        UserIdBox.Text = viewModel.UserId;
+        UserAvatarPathBox.Text = viewModel.UserAvatarPath;
+        AgentAvatarPathBox.Text = viewModel.AgentAvatarPath;
         WorkspaceBox.Text = viewModel.WorkspacePath;
         SafeCommandsBox.IsChecked = viewModel.AutoApproveSafeCommands;
         GitOperationsBox.IsChecked = viewModel.AutoApproveGitOperations;
         SelectTaggedItem(AgyExecutionPolicyBox, viewModel.AntigravityExecutionPolicy);
-        AgyStatusText.Text = "新会话使用 Antigravity CLI，模型回合不设应用层超时；点击“刷新 CLI 模型”检查可用模型。";
+        AgyStatusText.Text = "Manager 使用全局 Antigravity CLI、模型和推理强度；模型回合不设应用层超时。点击“刷新 CLI 模型”检查可用模型。";
         CodexStatusText.Text = "点击“检查 Codex 状态”验证 CLI 和当前账号。";
         _viewModel.PropertyChanged += ViewModelOnPropertyChanged;
         Closed += (_, _) => _viewModel.PropertyChanged -= ViewModelOnPropertyChanged;
@@ -120,6 +122,32 @@ public partial class ManagerSettingsWindow : Window
         SelectTextItem(CodexEffortBox, efforts.Contains(current, StringComparer.OrdinalIgnoreCase) ? current : efforts[0]);
     }
 
+    private void BrowseUserAvatarButton_OnClick(object sender, RoutedEventArgs e) => ChooseAvatar(UserAvatarPathBox, "user");
+    private void BrowseAgentAvatarButton_OnClick(object sender, RoutedEventArgs e) => ChooseAvatar(AgentAvatarPathBox, "agent");
+    private void ClearUserAvatarButton_OnClick(object sender, RoutedEventArgs e) => UserAvatarPathBox.Text = "";
+    private void ClearAgentAvatarButton_OnClick(object sender, RoutedEventArgs e) => AgentAvatarPathBox.Text = "";
+
+    private void ChooseAvatar(System.Windows.Controls.TextBox target, string slot)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择头像图片",
+            Filter = "图片文件|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif|所有文件|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+        if (dialog.ShowDialog() != true) return;
+        try
+        {
+            var cropWindow = new AvatarCropWindow(dialog.FileName, AvatarCropWindow.DefaultOutputPath(slot)) { Owner = this };
+            if (cropWindow.ShowDialog() == true && !string.IsNullOrWhiteSpace(cropWindow.SavedPath)) target.Text = cropWindow.SavedPath;
+        }
+        catch (Exception exception)
+        {
+            WpfMessageBox.Show(this, $"无法裁剪头像：{exception.Message}", "IlMatto", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void BrowseButton_OnClick(object sender, RoutedEventArgs e)
     {
         using var dialog = new System.Windows.Forms.FolderBrowserDialog
@@ -144,9 +172,19 @@ public partial class ManagerSettingsWindow : Window
             WpfMessageBox.Show(this, "API 超时必须是 10 到 600 秒之间的整数。Antigravity 当前不限制等待时间。", "IlMatto", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        if (CompanionCharacterPromptBox.Text.Length > 8_000 || CompanionUserProfileBox.Text.Length > 8_000 || CompanionRelationshipSummaryBox.Text.Length > 8_000)
+        if (CompanionCharacterNameBox.Text.Trim().Length > 80)
         {
-            WpfMessageBox.Show(this, "陪伴设定的每个字段不能超过 8000 个字符。", "IlMatto", MessageBoxButton.OK, MessageBoxImage.Warning);
+            WpfMessageBox.Show(this, "角色名称不能超过 80 个字符。", "IlMatto", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (CompanionCharacterPromptBox.Text.Length > 8_000)
+        {
+            WpfMessageBox.Show(this, "角色卡不能超过 8000 个字符。", "IlMatto", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (UserIdBox.Text.Trim().Length > 80)
+        {
+            WpfMessageBox.Show(this, "用户 ID 不能超过 80 个字符。", "IlMatto", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -174,11 +212,17 @@ public partial class ManagerSettingsWindow : Window
             CodexEffort = SelectedText(CodexEffortBox, "medium"),
             CodexApprovalPolicy = _viewModel.CodexApprovalPolicy,
             CodexSandboxMode = _viewModel.CodexSandboxMode,
+            UserId = string.IsNullOrWhiteSpace(UserIdBox.Text) ? "用户" : UserIdBox.Text.Trim(),
+            UserAvatarPath = UserAvatarPathBox.Text.Trim(),
+            AgentAvatarPath = AgentAvatarPathBox.Text.Trim(),
             DefaultCompanionProfile = new ManagerCompanionProfile
             {
-                CharacterPrompt = CompanionCharacterPromptBox.Text.Trim(),
-                UserProfile = CompanionUserProfileBox.Text.Trim(),
-                RelationshipSummary = CompanionRelationshipSummaryBox.Text.Trim(),
+                CharacterName = RoleCardComposer.NormalizeName(CompanionCharacterNameBox.Text),
+                CharacterPrompt = RoleCardComposer.Compose(CompanionCharacterNameBox.Text, CompanionCharacterPromptBox.Text),
+                // Preserve the legacy value so ManagerHost can seed the new
+                // global profile.md once. It is no longer shown or edited in
+                // this window.
+                UserProfile = _viewModel.CompanionUserProfile.Trim(),
             },
         };
         _viewModel.ApplySettings(settings, PiApiKeyBox.Password, MainApiKeyBox.Password);

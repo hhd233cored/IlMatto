@@ -24,6 +24,8 @@ IlMatto 是一个运行在开发机上的双层 WPF Agent。Manager 会话现在
 
 ```powershell
 cd C:\Users\33612\Documents\GitHub\IlMatto
+npm.cmd --prefix .\src\IlMatto.ManagerHost install
+npm.cmd --prefix .\src\IlMatto.ManagerHost run build
 dotnet run --project .\src\IlMatto.Desktop\IlMatto.Desktop.csproj
 ```
 
@@ -32,11 +34,13 @@ WPF 启动时会同时寻找 `ManagerHost/dist/index.js` 和按需使用的 `Age
 ## 使用
 
 1. 默认打开 Manager 界面。现有设置页仍可显示旧的 Provider 选项，但 ManagerHost 会将会话迁移为单一 Antigravity 上下文；不会启动 Pi/Codex Coding Worker。
-2. 在“设置 → 陪伴设定”编辑角色设定、用户资料和关系摘要。所有消息都进入同一个 Antigravity 会话，由 Antigravity 自行判断是否需要工具；只有用户明确要求本地操作时才执行命令或修改文件。
+2. 在“设置 → 角色设定”填写角色名称和角色卡。保存时角色名称会自动插入角色卡开头，并复制到新对话；首条用户消息会由同一配置下的 Antigravity 独立生成一个简短会话标题，生成失败时使用首条问题的截断文本。用户画像由应用本地 `%LocalAppData%\IlMatto\companion-memory\profile.md` 维护，并在 Manager 会话之间共享；重要内容由 Agent 按需写入会话摘要。所有消息都进入同一个 Antigravity 会话，由 Antigravity 自行判断是否需要工具；只有用户明确要求本地操作时才执行命令或修改文件。统一流式会话不设置 Manager 任务级最大等待时间，并向 AGY 传入一个可配置的长等待上限（默认 `--print-timeout 24h`）；启动和连接检查仍保留传输级超时。可通过 `ILMATTO_AGY_PRINT_TIMEOUT` 使用正的 Go duration 调整该上限，不能设置 `0s`。
 3. Manager 使用 `--mode accept-edits` 与 `--dangerously-skip-permissions`。它可以执行命令、修改或删除文件、访问网络以及使用本机配置的 MCP/插件；请把工作区视为可被自动操作的目录。Host 只转发文本、进度、工具状态和错误。
 4. 通过“视图 → Pi Coding 工作台”可按需打开原有 Pi 界面；关闭它不会影响 Manager 会话。
 
-如需让 Antigravity 了解用户确认后由 Codex 完成的任务，ManagerHost 会在 Antigravity 用户级全局配置 `%USERPROFILE%\.gemini\config\mcp_config.json` 中临时写入 `ilmatto-codex-observation`（保留原有 MCP Server）。该条目指向当前 ManagerHost 的本地管道，会话正常结束时只删除自己仍未被修改的条目；Codex 不存在或配置不可写时，观察通道自动停用，Antigravity 仍可正常运行。旧版本支持的工作区插件挂载仍可通过内部兼容选项使用。Facade 只暴露 `draft_codex_task`、`get_codex_status`、`get_latest_codex_report`、`get_codex_report` 和 `get_codex_diff`；生成草稿后必须在现有 Manager 审批卡中编辑/确认，ManagerHost 才会启动 Codex。Facade 不暴露提交、继续、steer 或中断接口，也不会把 Codex 实时输出发送给 Antigravity。
+如需让 Antigravity 了解用户确认后由 Codex 完成的任务，ManagerHost 会在 Antigravity 用户级全局配置 `%USERPROFILE%\.gemini\config\mcp_config.json` 中临时写入带会话后缀的 `ilmatto-agent-tools-*`（保留原有 MCP Server）。该 Facade 同时暴露受管附件限定的只读 `identify_image` 和 Codex 观察工具。该条目指向当前 ManagerHost 的本地管道，会话正常结束时只删除自己仍未被修改的条目；Codex 不存在、Google 凭据不可用或配置不可写时，对应可选能力自动停用，Antigravity 仍可正常运行。旧版本支持的工作区插件挂载仍可通过内部兼容选项使用。Facade 还暴露 `draft_codex_task`、`get_codex_status`、`get_latest_codex_report`、`get_codex_report` 和 `get_codex_diff`；生成 Codex 草稿后必须在现有输入框中编辑并发送，ManagerHost 才会启动 Codex。Facade 不暴露提交、继续、steer 或中断接口，也不会把 Codex 实时输出发送给 Antigravity。
+
+Web Detection 后端是可选的，`identify_image` MCP 通道只接受当前回合的受管图片附件 ID。ManagerHost 支持通过 `ILMATTO_GOOGLE_VISION_API_KEY` 提供本地开发 API Key；未设置 API Key 时使用本机 Application Default Credentials/`GOOGLE_APPLICATION_CREDENTIALS`，并自动携带用户 ADC 所需的配额项目请求头。凭据不会写入 Prompt、MCP 参数、工作区或聊天记录。结果只向 Agent 暴露候选实体、未归一化相关性分数和有限匹配数量，不暴露网页或图片 URL；结果按图片 SHA-256 缓存 24 小时，并限制请求频率和返回条目数量。Google Cloud Vision Web Detection 的字段定义见[官方教程](https://docs.cloud.google.com/vision/docs/internet-detection)和[REST 文档](https://docs.cloud.google.com/vision/docs/reference/rest/v1/AnnotateImageResponse)。
 
 MCP Facade 的手动入口（主要用于诊断；正常 Manager 会话会自动挂载）：
 
@@ -56,9 +60,9 @@ npm.cmd run mcp -- --pipe <ManagerHost管道名> --session-id <Manager会话ID>
 6. 左侧历史列表支持切换和删除会话；右侧“思路与工具”面板可展开/收起，显示思路增量、工具审批、执行状态和截断输出。
 7. Agent 回复支持常见 Markdown（标题、列表、代码块、粗体、斜体、链接、引用）以及常见 LaTeX 数学表达式（`$...$`、`$$...$$`、`\(...\)`、`\[...\]`）。右侧每条过程记录都可单独展开/折叠，折叠时只保留一行摘要。
 
-Manager 会话保存在 `%LocalAppData%\IlMatto\manager-sessions`。旧会话仍保留聊天记录，但 Provider/Coding Worker 绑定会迁移为统一 Antigravity 配置，不复用旧的自定义 Agent 会话 ID。图片会复制到 Manager 受管附件目录后随原始请求提供给 Antigravity；运行目录只保存日志和临时附件，不生成 Agent、Schema 或全局权限文件。可选 Codex 观察数据保存在 `%LocalAppData%\IlMatto\codex-observation`，原始事件只在本地私有日志中保存，Antigravity 只能按需读取摘要报告。Host 不写入 Antigravity 的全局 Agent 或权限配置，但会在会话期间维护一个受控的全局 MCP Server 条目。
+Manager 会话保存在 `%LocalAppData%\IlMatto\manager-sessions`。旧会话仍保留聊天记录，但 Provider/Coding Worker 绑定会迁移为统一 Antigravity 配置，不复用旧的自定义 Agent 会话 ID。图片会复制到 Manager 受管附件目录后随原始请求提供给 Antigravity；运行目录只保存日志和临时附件，不生成 Agent、Schema 或全局权限文件。陪伴记忆保存在 `%LocalAppData%\IlMatto\companion-memory`：`profile.md` 是全局用户画像，`sessions\<sessionId>\summary.json` 是会话摘要，`transcript.jsonl` 仅用于摘要命中后的有限原文片段。跨会话回忆默认只看摘要，第一版使用本地关键词检索，不使用 embedding 或向量 RAG。可选 Codex 观察数据保存在 `%LocalAppData%\IlMatto\codex-observation`，原始事件只在本地私有日志中保存，Antigravity 只能按需读取摘要报告。删除 Manager 会话时会清理上述 IlMatto 自己管理的会话级数据、受管附件和 Provider 本地会话文件，但保留全局 `profile.md` 与 Antigravity CLI 历史会话；Host 不写入 Antigravity 的全局 Agent 或权限配置，但会在会话期间维护一个受控的全局 MCP Server 条目。
 
-当前版本是单工作区、单活动会话的 MVP，不包含安装包、自动更新、Git 远端同步、并行编码/验证任务或进程级 Codex 隔离。Codex 观察通道为可选能力，默认不启动。
+ManagerHost 支持多个并行会话。不同工作区可以同时运行；同一工作区的写入任务使用独占锁，冲突会立即返回 `WORKSPACE_BUSY`，不会进入隐藏队列。默认最多 4 个活跃任务，可通过 `ILMATTO_MAX_CONCURRENT_TASKS`（1～16）调整。切换会话不会中断后台任务，关闭应用才会取消任务；任务本身不设最大执行时间。Codex 观察通道仍为可选能力，默认不启动。
 
 ## Git
 

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { CodexAppServerBridge, CodexWorkerError } from "./codex-worker.js";
 export class CodexObservationStore {
     root;
@@ -96,6 +96,41 @@ export class CodexObservationStore {
             return { taskId, diff: "" };
         }
     }
+    /** Remove only Codex observation artifacts owned by one Manager session. */
+    async deleteSession(sessionId) {
+        if (!isSafeFileStem(sessionId))
+            throw new Error("无效的 Manager 会话标识。");
+        const previous = this.indexQueue;
+        const operation = previous.then(async () => {
+            const index = await this.readIndexFile();
+            const entry = index[sessionId];
+            const taskIds = new Set((entry?.taskIds ?? []).filter(isSafeFileStem));
+            if (entry?.latestTaskId && isSafeFileStem(entry.latestTaskId))
+                taskIds.add(entry.latestTaskId);
+            const draftFiles = [];
+            for (const name of await readdir(this.root).catch(() => [])) {
+                if (!/^draft-[A-Za-z0-9_-]+\.json$/.test(name))
+                    continue;
+                try {
+                    const draft = JSON.parse(await readFile(path.join(this.root, name), "utf8"));
+                    if (draft.sessionId === sessionId)
+                        draftFiles.push(path.join(this.root, name));
+                }
+                catch { }
+            }
+            delete index[sessionId];
+            if (Object.keys(index).length === 0)
+                await rm(this.indexPath, { force: true });
+            else
+                await writeFile(this.indexPath, JSON.stringify(index, null, 2), "utf8");
+            const taskFiles = [...taskIds].flatMap((taskId) => [
+                this.draftPath(taskId), this.eventPath(taskId), this.reportPath(taskId), this.diffPath(taskId),
+            ]);
+            await Promise.all([...draftFiles, ...taskFiles].map((file) => rm(file, { force: true })));
+        });
+        this.indexQueue = operation.catch(() => undefined);
+        await operation;
+    }
     async getThreadId(sessionId) {
         return (await this.readIndex())[sessionId]?.threadId;
     }
@@ -145,6 +180,8 @@ export class CodexObservationController {
     onInteraction;
     onDraft;
     onStatus;
+    onTaskStart;
+    onTaskFinished;
     onEvent;
     bridgeFactory;
     drafts = new Map();
@@ -152,6 +189,7 @@ export class CodexObservationController {
     activeTask;
     currentStatus;
     eventQueue = Promise.resolve();
+    cancelRequested = false;
     constructor(options, store = new CodexObservationStore()) {
         this.store = store;
         this.sessionId = options.sessionId;
@@ -171,6 +209,8 @@ export class CodexObservationController {
         this.onInteraction = options.onInteraction;
         this.onDraft = options.onDraft;
         this.onStatus = options.onStatus;
+        this.onTaskStart = options.onTaskStart;
+        this.onTaskFinished = options.onTaskFinished;
         this.onEvent = options.onEvent;
         this.bridgeFactory = options.bridgeFactory;
         this.currentStatus = { sessionId: this.sessionId, state: "idle", reportAvailable: false };
@@ -277,7 +317,15 @@ export class CodexObservationController {
     cancel() {
         if (!this.activeTask || this.activeTask.finished)
             return;
-        this.bridge?.cancel();
+        this.cancelRequested = true;
+        if (this.bridge) {
+            this.bridge.cancel();
+            return;
+        }
+        // The App Server may still be connecting when the user cancels. Finish
+        // the task immediately and let runTask observe the terminal flag before it
+        // can send a turn/start request.
+        void this.finishTask(this.activeTask, "cancelled", "Codex 任务已取消。", "cancelled");
     }
     async dispose() {
         const active = this.activeTask;
@@ -288,6 +336,9 @@ export class CodexObservationController {
         await this.eventQueue;
         await this.bridge?.dispose();
         this.bridge = undefined;
+    }
+    async deleteLocalData() {
+        await this.store.deleteSession(this.sessionId);
     }
     async createDraft(request) {
         if (this.activeTask && !this.activeTask.finished)
@@ -322,31 +373,48 @@ export class CodexObservationController {
         if (this.activeTask && !this.activeTask.finished)
             throw new Error("Codex 已有任务正在运行。");
         const taskId = `task-${randomUUID()}`;
-        const active = {
-            taskId,
-            prompt,
-            attachments,
-            startedAt: new Date().toISOString(),
-            events: 0,
-            finished: false,
-            commands: [],
-            tests: [],
-            changedFiles: [],
-            warnings: [],
-            pendingQuestions: [],
-            diff: "",
-            finalText: "",
-            streamedText: "",
-        };
-        this.activeTask = active;
-        await this.store.saveReport(this.buildReport(active, "queued", ""));
-        this.setStatus({ state: "queued", taskId, reportAvailable: true, message: statusMessage });
-        void this.runTask(active);
-        return taskId;
+        const startedAt = new Date().toISOString();
+        try {
+            this.cancelRequested = false;
+            await this.onTaskStart?.(taskId, startedAt);
+            const active = {
+                taskId,
+                prompt,
+                attachments,
+                startedAt,
+                startedAtMs: Date.now(),
+                events: 0,
+                finished: false,
+                commands: [],
+                tests: [],
+                changedFiles: [],
+                warnings: [],
+                pendingQuestions: [],
+                diff: "",
+                finalText: "",
+                streamedText: "",
+            };
+            this.activeTask = active;
+            await this.store.saveReport(this.buildReport(active, "queued", ""));
+            this.setStatus({ state: "queued", taskId, reportAvailable: true, message: statusMessage });
+            void this.runTask(active);
+            return taskId;
+        }
+        catch (error) {
+            this.activeTask = undefined;
+            this.onTaskFinished?.(taskId, "failed");
+            throw error;
+        }
     }
     async runTask(active) {
         try {
             const bridge = await this.ensureBridge();
+            if (active.finished || this.activeTask !== active)
+                return;
+            if (this.cancelRequested) {
+                await this.finishTask(active, "cancelled", "Codex 任务已取消。", "cancelled");
+                return;
+            }
             bridge.sendCodeTask(active.taskId, active.prompt, active.attachments);
             this.setStatus({ state: "running", taskId: active.taskId, phase: "working", reportAvailable: true, message: "Codex 正在处理已确认的任务。" });
         }
@@ -515,13 +583,17 @@ export class CodexObservationController {
         // whose final text is joined with newlines by the App Server.
         const streamed = redactObservationText(active.streamedText, 12_000);
         const suffix = completionSuffix(safeText, streamed);
-        this.onEvent?.({ type: "completed", taskId: active.taskId, status: state, text: suffix });
+        this.onEvent?.({ type: "completed", taskId: active.taskId, status: state, text: suffix, startedAt: report.startedAt, completedAt: report.completedAt, durationMs: report.durationMs });
         if (this.activeTask === active)
             this.activeTask = undefined;
-        this.setStatus({ state, taskId: active.taskId, reportAvailable: true, message: report.summary });
+        this.setStatus({ state, taskId: active.taskId, reportAvailable: true, message: report.summary, startedAt: report.startedAt, completedAt: report.completedAt, durationMs: report.durationMs });
+        this.onTaskFinished?.(active.taskId, state);
+        this.cancelRequested = false;
     }
     buildReport(active, state, text) {
         const summary = redactObservationText(text || active.finalText || (state === "completed" ? "Codex 已完成任务，但没有返回额外说明。" : `Codex 任务${state === "cancelled" ? "已取消" : "未完成"}。`), 4_000);
+        const completedAt = state === "queued" ? undefined : new Date().toISOString();
+        const durationMs = completedAt ? Math.max(0, Date.parse(completedAt) - active.startedAtMs) : undefined;
         return {
             taskId: active.taskId,
             sessionId: this.sessionId,
@@ -533,7 +605,8 @@ export class CodexObservationController {
             warnings: [...new Set(active.warnings)].slice(0, 100),
             pendingQuestions: [...new Set(active.pendingQuestions)].slice(0, 20),
             startedAt: active.startedAt,
-            completedAt: state === "queued" ? undefined : new Date().toISOString(),
+            completedAt,
+            durationMs,
         };
     }
     async status() {
@@ -559,7 +632,14 @@ export class CodexObservationController {
         };
     }
     setStatus(partial) {
-        this.currentStatus = { sessionId: this.sessionId, ...partial };
+        const active = this.activeTask;
+        this.currentStatus = {
+            sessionId: this.sessionId,
+            ...partial,
+            startedAt: partial.startedAt ?? active?.startedAt ?? this.currentStatus.startedAt,
+            completedAt: partial.completedAt ?? this.currentStatus.completedAt,
+            durationMs: partial.durationMs ?? (active && !active.finished && active.startedAtMs ? Math.max(0, Date.now() - active.startedAtMs) : this.currentStatus.durationMs),
+        };
         this.onStatus?.(this.currentStatus);
     }
 }
@@ -568,6 +648,7 @@ function defaultObservationRoot() {
     return process.env.ILMATTO_CODEX_OBSERVATION_DIR ?? path.join(localAppData, "IlMatto", "codex-observation");
 }
 function hashPrompt(prompt) { return createHash("sha256").update(prompt, "utf8").digest("hex"); }
+function isSafeFileStem(value) { return /^[A-Za-z0-9_-]{1,200}$/.test(value); }
 function fail(code, message) { return { ok: false, error: { code, message } }; }
 function errorCode(error) {
     return error instanceof CodexWorkerError ? error.code : typeof error?.code === "string" ? error.code : "CODEX_OBSERVATION_ERROR";
