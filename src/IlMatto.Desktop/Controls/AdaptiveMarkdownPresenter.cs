@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using EmojiTextBlock = Emoji.Wpf.TextBlock;
@@ -48,9 +47,11 @@ public sealed class AdaptiveMarkdownPresenter : ContentControl
     private void RefreshContent()
     {
         var markdown = Markdown ?? string.Empty;
-        var usePlainText = DeferWhileStreaming || MarkdownClassifier.IsPlainText(markdown);
+        var kind = DeferWhileStreaming
+            ? MarkdownPresentationKind.Plain
+            : MarkdownClassifier.Classify(markdown);
 
-        if (usePlainText)
+        if (kind is MarkdownPresentationKind.Plain)
         {
             if (Content is EmojiTextBlock existing)
             {
@@ -64,6 +65,22 @@ public sealed class AdaptiveMarkdownPresenter : ContentControl
                 ColorBlend = true,
                 TextWrapping = TextWrapping.Wrap,
                 TextAlignment = TextAlignment.Left,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            };
+            return;
+        }
+
+        if (kind is MarkdownPresentationKind.Inline)
+        {
+            if (Content is InlineMarkdownTextBlock existing)
+            {
+                existing.Markdown = markdown;
+                return;
+            }
+
+            Content = new InlineMarkdownTextBlock
+            {
+                Markdown = markdown,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
             };
             return;
@@ -86,31 +103,39 @@ public sealed class AdaptiveMarkdownPresenter : ContentControl
 }
 
 /// <summary>Conservative classifier: a false negative keeps the existing renderer.</summary>
+internal enum MarkdownPresentationKind
+{
+    Plain,
+    Inline,
+    Complex,
+}
+
 internal static class MarkdownClassifier
 {
-    private static readonly Regex OrderedListPrefix = new(@"^\d{1,9}[.)]\s+", RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex HeadingPrefix = new(@"^#{1,6}\s+", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex BulletPrefix = new(@"^[-*+]\s+", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex OrderedListPrefix = new(@"^\d{1,9}[.)]\s+", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex QuotePrefix = new(@"^>\s?", System.Text.RegularExpressions.RegexOptions.Compiled);
 
-    public static bool IsPlainText(string? value)
+    public static MarkdownPresentationKind Classify(string? value)
     {
-        if (string.IsNullOrEmpty(value)) return true;
+        if (string.IsNullOrEmpty(value)) return MarkdownPresentationKind.Plain;
 
-        // These characters are all meaningful in the supported inline
-        // Markdown subset. Treating ambiguous prose as Markdown is slower but
-        // preserves output; treating Markdown as plain text would be wrong.
-        if (value.IndexOfAny(['`', '*', '_', '~', '[', ']', '\\', '|', '$', '<', '>']) >= 0)
-            return false;
+        // These signals can change a paragraph into a block or formula. They
+        // must keep the complete FlowDocument path for visual compatibility.
+        if (value.IndexOfAny(['|', '$', '\\', '<', '>']) >= 0 || value.Contains("![", StringComparison.Ordinal))
+            return MarkdownPresentationKind.Complex;
+
+        var hasInlineSyntax = value.IndexOfAny(['`', '*', '_', '~', '[', ']']) >= 0;
 
         foreach (var sourceLine in value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
         {
             var line = sourceLine.TrimStart();
-            if (line.StartsWith("# ", StringComparison.Ordinal) ||
-                line.StartsWith("## ", StringComparison.Ordinal) ||
-                line.StartsWith("### ", StringComparison.Ordinal) ||
-                line.StartsWith("+ ", StringComparison.Ordinal) ||
-                OrderedListPrefix.IsMatch(line))
-                return false;
+            if (line.StartsWith("```", StringComparison.Ordinal) || HeadingPrefix.IsMatch(line) ||
+                BulletPrefix.IsMatch(line) || OrderedListPrefix.IsMatch(line) || QuotePrefix.IsMatch(line))
+                return MarkdownPresentationKind.Complex;
         }
 
-        return true;
+        return hasInlineSyntax ? MarkdownPresentationKind.Inline : MarkdownPresentationKind.Plain;
     }
 }
