@@ -54,23 +54,16 @@
       <Setter Property="Background" Value="Transparent"/>
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="Padding" Value="28,28,28,18"/>
-      <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+      <Setter Property="ScrollViewer.CanContentScroll" Value="False"/>
       <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
       <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
-      <!-- Dragging the thumb moves the chat immediately; Markdown stays cached and
-           the virtualizing panel limits the amount of UI created at once. -->
+      <!-- Deliberately realize the complete conversation. This is the baseline
+           rendering mode used to compare Markdown cost against virtualization. -->
       <Setter Property="ScrollViewer.IsDeferredScrollingEnabled" Value="False"/>
-      <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
-      <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
-      <!-- Keep one viewport ready on either side so normal drag scrolling does
-           not need to construct every newly visible chat bubble synchronously. -->
-      <Setter Property="VirtualizingPanel.CacheLength" Value="1,1"/>
-      <Setter Property="VirtualizingPanel.CacheLengthUnit" Value="Page"/>
-      <!-- Let the battle-tested WPF panel own its pixel offset and extent. -->
-      <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
+      <Setter Property="VirtualizingPanel.IsVirtualizing" Value="False"/>
       <Setter Property="ItemsPanel">
         <Setter.Value>
-          <ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate>
+          <ItemsPanelTemplate><StackPanel/></ItemsPanelTemplate>
         </Setter.Value>
       </Setter>
     </Style>
@@ -446,9 +439,9 @@
     </Border>
 
     <Grid Grid.Column="1" Grid.Row="1" Background="#F5F6F8">
-      <ListBox x:Name="ManagerChatList" ItemsSource="{Binding ChatTimelineItems, ElementName=RootWindow}" Style="{StaticResource ChatHistoryList}" ItemContainerStyle="{StaticResource ChatHistoryItem}" HorizontalContentAlignment="Stretch" Loaded="ManagerChatList_OnLoaded">
-          <ListBox.Resources>
-            <DataTemplate x:Key="ManagerChatMessageTemplate">
+      <ListBox x:Name="ManagerChatList" ItemsSource="{Binding ChatEntries}" Style="{StaticResource ChatHistoryList}" ItemContainerStyle="{StaticResource ChatHistoryItem}" HorizontalContentAlignment="Stretch" Loaded="ManagerChatList_OnLoaded">
+          <ListBox.ItemTemplate>
+            <DataTemplate>
               <Grid Margin="0,0,0,20" HorizontalAlignment="Stretch">
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                 <Border Grid.Row="0" Background="#ECEEF2" CornerRadius="12" Padding="10,4" HorizontalAlignment="Center" Margin="0,0,0,14" Visibility="{Binding ShowDateSeparator, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -568,7 +561,7 @@
                                       <MultiDataTrigger>
                                         <MultiDataTrigger.Conditions>
                                           <Condition Binding="{Binding IsText}" Value="True"/>
-                                          <Condition Binding="{Binding DataContext.Entry.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"/>
+                                          <Condition Binding="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"/>
                                         </MultiDataTrigger.Conditions>
                                         <Setter Property="Visibility" Value="Visible"/>
                                       </MultiDataTrigger>
@@ -576,7 +569,7 @@
                                   </Style>
                                 </TextBlock.Style>
                               </TextBlock>
-                              <local:MarkdownViewer DeferWhileStreaming="{Binding DataContext.Entry.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Markdown="{Binding Text}" Foreground="#172033" FontSize="14" HorizontalAlignment="Left" Margin="0,0,0,5">
+                              <local:MarkdownViewer DeferWhileStreaming="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Markdown="{Binding Text}" Foreground="#172033" FontSize="14" HorizontalAlignment="Left" Margin="0,0,0,5">
                                 <local:MarkdownViewer.Style>
                                   <Style TargetType="local:MarkdownViewer">
                                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -584,7 +577,7 @@
                                       <MultiDataTrigger>
                                         <MultiDataTrigger.Conditions>
                                           <Condition Binding="{Binding IsText}" Value="True"/>
-                                          <Condition Binding="{Binding DataContext.Entry.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="False"/>
+                                          <Condition Binding="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="False"/>
                                         </MultiDataTrigger.Conditions>
                                         <Setter Property="Visibility" Value="Visible"/>
                                       </MultiDataTrigger>
@@ -689,16 +682,7 @@
                 </Grid>
               </Grid>
             </DataTemplate>
-            <DataTemplate x:Key="ChatTimelineSpacerTemplate">
-              <Border Height="{Binding Height}" Background="Transparent" IsHitTestVisible="False"/>
-            </DataTemplate>
-            <DataTemplate x:Key="ChatTimelineMessageTemplate">
-              <local:ReservedMessagePresenter Message="{Binding Entry}" ReservedHeight="{Binding ReservedHeight}" RenderContent="{Binding RenderContent}" ContentTemplate="{StaticResource ManagerChatMessageTemplate}" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top" NaturalHeightMeasured="TimelineMessagePresenter_OnNaturalHeightMeasured"/>
-            </DataTemplate>
-          </ListBox.Resources>
-          <ListBox.ItemTemplateSelector>
-            <local:ChatTimelineItemTemplateSelector SpacerTemplate="{StaticResource ChatTimelineSpacerTemplate}" MessageTemplate="{StaticResource ChatTimelineMessageTemplate}"/>
-          </ListBox.ItemTemplateSelector>
+          </ListBox.ItemTemplate>
       </ListBox>
     </Grid>
 
