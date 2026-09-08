@@ -42,6 +42,7 @@ public partial class ManagerSettingsWindow : Window
         UserIdBox.Text = viewModel.UserId;
         UserAvatarPathBox.Text = viewModel.UserAvatarPath;
         AgentAvatarPathBox.Text = viewModel.AgentAvatarPath;
+        FullChatRenderingBox.IsChecked = viewModel.UseFullChatRendering;
         WorkspaceBox.Text = viewModel.WorkspacePath;
         SafeCommandsBox.IsChecked = viewModel.AutoApproveSafeCommands;
         GitOperationsBox.IsChecked = viewModel.AutoApproveGitOperations;
@@ -215,6 +216,7 @@ public partial class ManagerSettingsWindow : Window
             UserId = string.IsNullOrWhiteSpace(UserIdBox.Text) ? "用户" : UserIdBox.Text.Trim(),
             UserAvatarPath = UserAvatarPathBox.Text.Trim(),
             AgentAvatarPath = AgentAvatarPathBox.Text.Trim(),
+            UseFullChatRendering = FullChatRenderingBox.IsChecked == true,
             DefaultCompanionProfile = new ManagerCompanionProfile
             {
                 CharacterName = RoleCardComposer.NormalizeName(CompanionCharacterNameBox.Text),

@@ -19,17 +19,23 @@ internal sealed partial class ChatTimelineSpacer : ObservableObject
 /// </summary>
 internal sealed partial class ChatTimelineMessageRow : ObservableObject
 {
-    public ChatTimelineMessageRow(ManagerChatEntry entry, int index, double reservedHeight, bool renderContent)
+    public ChatTimelineMessageRow(ManagerChatEntry entry, int index, double reservedHeight, double reservedContentHeight, double reservedBubbleHeight, double reservedBubbleWidth, bool renderContent)
     {
         Entry = entry;
         Index = index;
         this.reservedHeight = reservedHeight;
+        this.reservedContentHeight = reservedContentHeight;
+        this.reservedBubbleHeight = reservedBubbleHeight;
+        this.reservedBubbleWidth = reservedBubbleWidth;
         this.renderContent = renderContent;
     }
 
     public ManagerChatEntry Entry { get; }
     public int Index { get; set; }
     [ObservableProperty] private double reservedHeight;
+    [ObservableProperty] private double reservedContentHeight;
+    [ObservableProperty] private double reservedBubbleHeight;
+    [ObservableProperty] private double reservedBubbleWidth;
     [ObservableProperty] private bool renderContent;
 }
 
@@ -81,6 +87,22 @@ public sealed class ReservedMessagePresenter : ContentControl
         nameof(RenderContent), typeof(bool), typeof(ReservedMessagePresenter),
         new FrameworkPropertyMetadata(true, OnPresentationPropertyChanged));
 
+    public static readonly DependencyProperty FullContentTemplateProperty = DependencyProperty.Register(
+        nameof(FullContentTemplate), typeof(DataTemplate), typeof(ReservedMessagePresenter),
+        new FrameworkPropertyMetadata(null, OnPresentationPropertyChanged));
+
+    public static readonly DependencyProperty PlaceholderTemplateProperty = DependencyProperty.Register(
+        nameof(PlaceholderTemplate), typeof(DataTemplate), typeof(ReservedMessagePresenter),
+        new FrameworkPropertyMetadata(null, OnPresentationPropertyChanged));
+
+    public static readonly DependencyProperty ReservedBubbleHeightProperty = DependencyProperty.Register(
+        nameof(ReservedBubbleHeight), typeof(double), typeof(ReservedMessagePresenter),
+        new FrameworkPropertyMetadata(48d, FrameworkPropertyMetadataOptions.AffectsMeasure));
+
+    public static readonly DependencyProperty ReservedBubbleWidthProperty = DependencyProperty.Register(
+        nameof(ReservedBubbleWidth), typeof(double), typeof(ReservedMessagePresenter),
+        new FrameworkPropertyMetadata(180d, FrameworkPropertyMetadataOptions.AffectsMeasure));
+
     private int _measurementVersion;
 
     public ReservedMessagePresenter()
@@ -110,6 +132,30 @@ public sealed class ReservedMessagePresenter : ContentControl
         set => SetValue(RenderContentProperty, value);
     }
 
+    public DataTemplate? FullContentTemplate
+    {
+        get => (DataTemplate?)GetValue(FullContentTemplateProperty);
+        set => SetValue(FullContentTemplateProperty, value);
+    }
+
+    public DataTemplate? PlaceholderTemplate
+    {
+        get => (DataTemplate?)GetValue(PlaceholderTemplateProperty);
+        set => SetValue(PlaceholderTemplateProperty, value);
+    }
+
+    public double ReservedBubbleHeight
+    {
+        get => (double)GetValue(ReservedBubbleHeightProperty);
+        set => SetValue(ReservedBubbleHeightProperty, value);
+    }
+
+    public double ReservedBubbleWidth
+    {
+        get => (double)GetValue(ReservedBubbleWidthProperty);
+        set => SetValue(ReservedBubbleWidthProperty, value);
+    }
+
     public event EventHandler<ChatMessageMeasuredEventArgs>? NaturalHeightMeasured;
 
     protected override WpfSize MeasureOverride(WpfSize constraint)
@@ -133,7 +179,10 @@ public sealed class ReservedMessagePresenter : ContentControl
     private static void OnPresentationPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var presenter = (ReservedMessagePresenter)d;
-        presenter.Content = presenter.RenderContent ? presenter.Message : null;
+        presenter.Content = presenter.Message;
+        presenter.ContentTemplate = presenter.RenderContent
+            ? presenter.FullContentTemplate
+            : presenter.PlaceholderTemplate;
         presenter.InvalidateMeasure();
     }
 

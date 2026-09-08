@@ -40,6 +40,8 @@ public sealed class AppSettings
     public string UserId { get; set; } = "用户";
     public string UserAvatarPath { get; set; } = "";
     public string AgentAvatarPath { get; set; } = "";
+    /// <summary>Use the legacy fully rendered chat list for diagnostics.</summary>
+    public bool UseFullChatRendering { get; set; }
     public ManagerCompanionProfile DefaultCompanionProfile { get; set; } = new();
 
     internal static string FindCodexCli()

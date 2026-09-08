@@ -312,6 +312,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty] private string userId = "用户";
     [ObservableProperty] private string userAvatarPath = "";
     [ObservableProperty] private string agentAvatarPath = "";
+    [ObservableProperty] private bool useFullChatRendering;
     [ObservableProperty] private BitmapImage? userAvatarImage;
     [ObservableProperty] private BitmapImage? agentAvatarImage;
     // Legacy setting retained only as a one-time seed for profile.md.
@@ -2422,6 +2423,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         UserId = string.IsNullOrWhiteSpace(settings.UserId) ? "用户" : settings.UserId.Trim();
         UserAvatarPath = settings.UserAvatarPath?.Trim() ?? "";
         AgentAvatarPath = settings.AgentAvatarPath?.Trim() ?? "";
+        UseFullChatRendering = settings.UseFullChatRendering;
         ReloadAvatarImages();
         var companion = settings.DefaultCompanionProfile ?? new ManagerCompanionProfile();
         CompanionCharacterName = RoleCardComposer.NormalizeName(companion.CharacterName);

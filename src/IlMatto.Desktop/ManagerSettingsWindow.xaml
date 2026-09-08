@@ -157,6 +157,18 @@
           </StackPanel>
         </ScrollViewer>
       </TabItem>
+      <TabItem Header="界面与性能">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="6,18,12,12">
+            <TextBlock Text="聊天渲染模式" FontWeight="SemiBold"/>
+            <CheckBox x:Name="FullChatRenderingBox" Content="完整渲染所有消息（调试模式）" Margin="0,8,0,0"/>
+            <TextBlock Text="关闭时使用轻量空气泡虚拟化：只创建视口附近的消息外框，正文 Markdown、图片和过程内容暂不渲染。开启后恢复原来的完整消息渲染，适合对比布局、记录气泡尺寸或排查 Markdown 性能。修改后需要重启程序才能切换已创建的聊天列表。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,7,0,0"/>
+            <Border Background="#FFF7DF" BorderBrush="#E8C35A" BorderThickness="1" CornerRadius="7" Padding="10" Margin="0,16,0,0">
+              <TextBlock Text="环境变量 ILMATTO_CHAT_RENDER_MODE=full 或 =air 的优先级高于此设置，可用于一次性调试，不会修改设置文件。" TextWrapping="Wrap" Foreground="#805B12"/>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
       <TabItem Header="工作区与安全">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
           <StackPanel Margin="6,18,12,12">

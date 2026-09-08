@@ -7,6 +7,136 @@
         Background="#F5F6F8" WindowStartupLocation="Manual" PreviewKeyDown="Window_OnPreviewKeyDown">
   <Window.Resources>
     <local:WidthRatioConverter x:Key="MessageMaxWidthConverter"/>
+    <DataTemplate x:Key="ChatTimelineSpacerTemplate">
+      <Border Height="{Binding Height}" Background="Transparent"/>
+    </DataTemplate>
+    <DataTemplate x:Key="ChatTimelineAirBubbleTemplate">
+      <Grid Height="{Binding ReservedHeight}" Margin="0,0,0,0" HorizontalAlignment="Stretch" ClipToBounds="True">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <Border Grid.Row="0" Background="#ECEEF2" CornerRadius="12" Padding="10,4" HorizontalAlignment="Center" Margin="0,0,0,14" Visibility="{Binding Entry.ShowDateSeparator, Converter={StaticResource BooleanToVisibilityConverter}}">
+          <TextBlock Text="{Binding Entry.DateSeparatorLabel}" Foreground="#8C949E" FontSize="11"/>
+        </Border>
+        <Grid x:Name="AirMessageRow" Grid.Row="1" Margin="0,0,0,20" HorizontalAlignment="Stretch">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="44"/></Grid.ColumnDefinitions>
+          <Border Grid.Column="0" Width="34" Height="34" CornerRadius="17" Background="#1B78B8" VerticalAlignment="Top" HorizontalAlignment="Left" Margin="0,1,0,0">
+            <Border.Style>
+              <Style TargetType="Border">
+                <Setter Property="Visibility" Value="Visible"/>
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Entry.IsUser}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                  <DataTrigger Binding="{Binding Entry.IsTransientStatus}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Border.Style>
+            <Grid>
+              <TextBlock Text="{Binding Entry.AvatarText}" Foreground="White" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Visible"/>
+                    <Style.Triggers><DataTrigger Binding="{Binding DataContext.HasAgentAvatar, Source={x:Reference RootWindow}}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
+              <Image Source="{Binding DataContext.AgentAvatarImage, Source={x:Reference RootWindow}}" Stretch="UniformToFill" Margin="1">
+                <Image.Style>
+                  <Style TargetType="Image">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers><DataTrigger Binding="{Binding DataContext.HasAgentAvatar, Source={x:Reference RootWindow}}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                  </Style>
+                </Image.Style>
+              </Image>
+            </Grid>
+          </Border>
+          <Border Grid.Column="4" Width="34" Height="34" CornerRadius="17" Background="#F2A65A" VerticalAlignment="Top" HorizontalAlignment="Right" Margin="0,1,0,0">
+            <Border.Style>
+              <Style TargetType="Border">
+                <Setter Property="Visibility" Value="Collapsed"/>
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Entry.IsUser}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+                  <DataTrigger Binding="{Binding Entry.IsTransientStatus}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Border.Style>
+            <Grid>
+              <TextBlock Text="{Binding DataContext.UserAvatarText, Source={x:Reference RootWindow}}" Foreground="White" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Visible"/>
+                    <Style.Triggers><DataTrigger Binding="{Binding DataContext.HasUserAvatar, Source={x:Reference RootWindow}}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
+              <Image Source="{Binding DataContext.UserAvatarImage, Source={x:Reference RootWindow}}" Stretch="UniformToFill" Margin="1">
+                <Image.Style>
+                  <Style TargetType="Image">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers><DataTrigger Binding="{Binding DataContext.HasUserAvatar, Source={x:Reference RootWindow}}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                  </Style>
+                </Image.Style>
+              </Image>
+            </Grid>
+          </Border>
+          <StackPanel x:Name="AirMessageBlock">
+            <StackPanel.Style>
+              <Style TargetType="StackPanel">
+                <Setter Property="Grid.Column" Value="1"/>
+                <Setter Property="Grid.ColumnSpan" Value="2"/>
+                <Setter Property="HorizontalAlignment" Value="Left"/>
+                <Setter Property="MaxWidth" Value="{Binding ActualWidth, ElementName=AirMessageRow, Converter={StaticResource MessageMaxWidthConverter}, ConverterParameter=0.6666667}"/>
+                <Setter Property="Margin" Value="0,4,0,0"/>
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Entry.IsUser}" Value="True"><Setter Property="Grid.Column" Value="2"/><Setter Property="Grid.ColumnSpan" Value="2"/><Setter Property="HorizontalAlignment" Value="Right"/></DataTrigger>
+                  <DataTrigger Binding="{Binding Entry.IsTransientStatus}" Value="True"><Setter Property="Grid.Column" Value="1"/><Setter Property="Grid.ColumnSpan" Value="3"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Margin" Value="0"/></DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </StackPanel.Style>
+            <StackPanel x:Name="AirMessageHeader" Orientation="Horizontal" Margin="6,0,6,8">
+              <StackPanel.Style>
+                <Style TargetType="StackPanel">
+                  <Setter Property="HorizontalAlignment" Value="Left"/>
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding Entry.IsUser}" Value="True"><Setter Property="HorizontalAlignment" Value="Right"/></DataTrigger>
+                    <DataTrigger Binding="{Binding Entry.IsTransientStatus}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </StackPanel.Style>
+              <TextBlock Text="{Binding Entry.DisplayRole}" Foreground="#4F5965" FontSize="10.5" FontWeight="Normal">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Visible"/>
+                    <Style.Triggers><DataTrigger Binding="{Binding Entry.IsUser}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
+              <TextBlock Text="{Binding DataContext.UserId, Source={x:Reference RootWindow}}" Foreground="#4F5965" FontSize="10.5" FontWeight="Normal">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers><DataTrigger Binding="{Binding Entry.IsUser}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
+              <TextBlock Text="{Binding Entry.Runtime.DisplayLabel}" Foreground="#8A93A0" FontSize="10.5" Margin="10,0,0,0"/>
+              <TextBlock Text="{Binding Entry.TimeLabel}" Foreground="#A1A8B2" FontSize="10.5" Margin="10,0,0,0"/>
+            </StackPanel>
+            <local:ReservedMessagePresenter
+                Width="{Binding ReservedBubbleWidth}"
+                Height="{Binding ReservedContentHeight}"
+                ReservedHeight="{Binding ReservedContentHeight}"
+                ReservedBubbleHeight="{Binding ReservedBubbleHeight}"
+                ReservedBubbleWidth="{Binding ReservedBubbleWidth}"
+                Message="{Binding Entry}"
+                RenderContent="{Binding RenderContent}"
+                FullContentTemplate="{DynamicResource ChatTimelineFullContentTemplate}"
+                PlaceholderTemplate="{DynamicResource ChatTimelineSkeletonTemplate}"
+                NaturalHeightMeasured="ChatTimelinePresenter_OnNaturalHeightMeasured"/>
+          </StackPanel>
+        </Grid>
+      </Grid>
+    </DataTemplate>
+    <local:ChatTimelineItemTemplateSelector x:Key="ChatTimelineItemSelector"
+                                            SpacerTemplate="{StaticResource ChatTimelineSpacerTemplate}"
+                                            MessageTemplate="{StaticResource ChatTimelineAirBubbleTemplate}"/>
     <DropShadowEffect x:Key="HistoryItemHoverShadow" Color="#6B7280" BlurRadius="8" ShadowDepth="1" Opacity="0.18"/>
     <DropShadowEffect x:Key="SelectorHoverShadow" Color="#6B7280" BlurRadius="8" ShadowDepth="1" Opacity="0.18"/>
     <ControlTemplate x:Key="NoHoverButtonTemplate" TargetType="Button">
@@ -72,6 +202,8 @@
       <Setter Property="Margin" Value="0"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
       <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <EventSetter Event="Loaded" Handler="ChatHistoryItem_OnLoaded"/>
+      <EventSetter Event="SizeChanged" Handler="ChatHistoryItem_OnSizeChanged"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
@@ -349,6 +481,134 @@
       <Setter Property="Background" Value="Transparent"/>
       <Setter Property="BorderThickness" Value="0"/>
     </Style>
+
+    <!-- The timeline keeps this placeholder and the measured dimensions even
+         when Markdown is not materialized. Only one of these templates is
+         selected by ReservedMessagePresenter, so the expensive tree is not
+         created for rows that are still waiting in the render queue. -->
+    <DataTemplate x:Key="ChatTimelineSkeletonTemplate">
+      <Border Width="{Binding RelativeSource={RelativeSource AncestorType=local:ReservedMessagePresenter}, Path=ReservedBubbleWidth}"
+              Height="{Binding RelativeSource={RelativeSource AncestorType=local:ReservedMessagePresenter}, Path=ReservedBubbleHeight}"
+              Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="15">
+        <Border.Style>
+          <Style TargetType="Border">
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#E4E7EC"/>
+            <Style.Triggers>
+              <DataTrigger Binding="{Binding IsUser}" Value="True"><Setter Property="Background" Value="#E8F2FF"/><Setter Property="BorderBrush" Value="#C9DFF7"/></DataTrigger>
+              <DataTrigger Binding="{Binding IsTransientStatus}" Value="True"><Setter Property="Background" Value="#EEF1F5"/><Setter Property="BorderBrush" Value="#EEF1F5"/><Setter Property="BorderThickness" Value="0"/><Setter Property="CornerRadius" Value="11"/></DataTrigger>
+            </Style.Triggers>
+          </Style>
+        </Border.Style>
+      </Border>
+    </DataTemplate>
+
+    <DataTemplate x:Key="ChatTimelineFullContentTemplate">
+      <StackPanel ClipToBounds="True">
+        <ItemsControl ItemsSource="{Binding Attachments}"
+                      Visibility="{Binding HasAttachments, Converter={StaticResource BooleanToVisibilityConverter}}"
+                      Margin="0,0,0,8">
+          <ItemsControl.Style>
+            <Style TargetType="ItemsControl">
+              <Setter Property="HorizontalAlignment" Value="Stretch"/>
+              <Setter Property="HorizontalContentAlignment" Value="Left"/>
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsUser}" Value="True"><Setter Property="HorizontalContentAlignment" Value="Right"/></DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </ItemsControl.Style>
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate><WrapPanel HorizontalAlignment="{Binding HorizontalContentAlignment, RelativeSource={RelativeSource AncestorType=ItemsControl}}"/></ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <local:DeferredImage ImagePath="{Binding Path}" Width="180" Height="140" Stretch="Uniform" Margin="0,0,8,8" Cursor="Hand" MouseLeftButtonUp="Image_OnMouseLeftButtonUp" ToolTip="点击查看原图：{Binding DisplayName}"/>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <Border Width="{Binding RelativeSource={RelativeSource AncestorType=local:ReservedMessagePresenter}, Path=ReservedBubbleWidth}"
+                Height="{Binding RelativeSource={RelativeSource AncestorType=local:ReservedMessagePresenter}, Path=ReservedBubbleHeight}"
+                BorderThickness="1" CornerRadius="15" Padding="16,12" ClipToBounds="True">
+          <Border.Style>
+            <Style TargetType="Border">
+              <Setter Property="Background" Value="#FFFFFF"/>
+              <Setter Property="BorderBrush" Value="#E4E7EC"/>
+              <Setter Property="HorizontalAlignment" Value="Left"/>
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsUser}" Value="True"><Setter Property="Background" Value="#E8F2FF"/><Setter Property="BorderBrush" Value="#C9DFF7"/><Setter Property="HorizontalAlignment" Value="Right"/></DataTrigger>
+                <DataTrigger Binding="{Binding HasMessageBody}" Value="False"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                <DataTrigger Binding="{Binding IsTransientStatus}" Value="True"><Setter Property="Background" Value="#EEF1F5"/><Setter Property="BorderBrush" Value="#EEF1F5"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="10,5"/><Setter Property="CornerRadius" Value="11"/><Setter Property="HorizontalAlignment" Value="Left"/><Setter Property="Visibility" Value="Visible"/></DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Border.Style>
+          <Grid>
+            <StackPanel>
+              <StackPanel>
+                <ItemsControl ItemsSource="{Binding Segments}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                      <Grid>
+                        <local:AdaptiveMarkdownPresenter Markdown="{Binding Text}" DeferWhileStreaming="{Binding DataContext.Entry.IsStreamingText, RelativeSource={RelativeSource AncestorType=local:ReservedMessagePresenter}}" Foreground="#172033" FontFamily="华文中宋" FontSize="14" HorizontalAlignment="Left" Margin="0">
+                          <local:AdaptiveMarkdownPresenter.Style>
+                            <Style TargetType="local:AdaptiveMarkdownPresenter">
+                              <Setter Property="Visibility" Value="Collapsed"/>
+                              <Style.Triggers><DataTrigger Binding="{Binding IsText}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                            </Style>
+                          </local:AdaptiveMarkdownPresenter.Style>
+                        </local:AdaptiveMarkdownPresenter>
+                        <Expander Visibility="{Binding HasVisibleOperations, Converter={StaticResource BooleanToVisibilityConverter}}" Style="{StaticResource ProcessExpander}" IsExpanded="{Binding IsExpanded, Mode=TwoWay}" HorizontalAlignment="Stretch" Background="Transparent" BorderThickness="0" Padding="0" Margin="0,2,0,2">
+                          <Expander.Header>
+                            <Grid MinHeight="22" MaxWidth="690" HorizontalAlignment="Left">
+                              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                              <TextBlock Grid.Column="0" Text="{Binding ToggleGlyph}" Foreground="#9CA3AF" FontSize="14" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                              <TextBlock Grid.Column="1" Text="{Binding LatestOperation.DisplayTitle}" Foreground="#6B7280" FontSize="13" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" MaxWidth="260"/>
+                              <TextBlock Grid.Column="2" Text="{Binding LatestOperation.CommandPreview}" ToolTip="{Binding LatestOperation.CommandLine}" Foreground="#6B7280" FontSize="12" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                              <TextBlock Grid.Column="3" Text="{Binding LatestOperation.Status}" Foreground="#9CA3AF" FontSize="12" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            </Grid>
+                          </Expander.Header>
+                          <StackPanel Margin="0,4,0,4">
+                            <local:MarkdownViewer Markdown="{Binding LatestOperation.Details}" Foreground="#64748B" FontSize="12" MaxWidth="690" HorizontalAlignment="Left" Margin="0,0,0,4">
+                              <local:MarkdownViewer.Style>
+                                <Style TargetType="local:MarkdownViewer">
+                                  <Setter Property="Visibility" Value="Collapsed"/>
+                                  <Style.Triggers><DataTrigger Binding="{Binding LatestOperation.IsThinking}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                                </Style>
+                              </local:MarkdownViewer.Style>
+                            </local:MarkdownViewer>
+                            <TextBlock Text="{Binding LatestOperation.Details}" Foreground="#64748B" FontSize="12" TextWrapping="Wrap" FontFamily="Consolas" MaxWidth="690" HorizontalAlignment="Left">
+                              <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                  <Setter Property="Visibility" Value="Visible"/>
+                                  <Style.Triggers><DataTrigger Binding="{Binding LatestOperation.IsThinking}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers>
+                                </Style>
+                              </TextBlock.Style>
+                            </TextBlock>
+                          </StackPanel>
+                        </Expander>
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Border Background="#F7FAFD" BorderBrush="#D8E2EE" BorderThickness="1" CornerRadius="9" Padding="12" Margin="0,10,0,0">
+                  <Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Visible"/><Style.Triggers><DataTrigger Binding="{Binding CodeResult}" Value="{x:Null}"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></Border.Style>
+                  <StackPanel>
+                    <DockPanel><TextBlock Text="Coding Agent 结果" FontWeight="SemiBold" Foreground="#273244"/><TextBlock DockPanel.Dock="Right" Text="{Binding CodeResult.StatusLabel}" Foreground="#2563EB"/></DockPanel>
+                    <TextBlock Text="{Binding CodeResult.SummaryForUser}" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="#273244"/>
+                    <ItemsControl ItemsSource="{Binding CodeResult.TechnicalDecisions}" Margin="0,8,0,0"><ItemsControl.ItemTemplate><DataTemplate><StackPanel Margin="0,3"><TextBlock Text="{Binding Decision}" FontWeight="SemiBold"/><TextBlock Text="{Binding Reason}" Foreground="#64748B" TextWrapping="Wrap"/></StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                    <ItemsControl ItemsSource="{Binding CodeResult.FilesChanged}" Margin="0,8,0,0"><ItemsControl.ItemTemplate><DataTemplate><Grid Margin="0,3"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="70"/><ColumnDefinition Width="70"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Path}" TextTrimming="CharacterEllipsis"/><TextBlock Grid.Column="1" Text="{Binding Additions, StringFormat=+{0}}" Foreground="#07851C" HorizontalAlignment="Right"/><TextBlock Grid.Column="2" Text="{Binding Deletions, StringFormat=-{0}}" Foreground="#DC2626" HorizontalAlignment="Right"/></Grid></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                    <ItemsControl ItemsSource="{Binding CodeResult.Validation}" Margin="0,8,0,0"><ItemsControl.ItemTemplate><DataTemplate><StackPanel Margin="0,3"><TextBlock Text="{Binding Command}" FontFamily="Consolas"/><TextBlock Text="{Binding Summary}" Foreground="#64748B"/></StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                    <ItemsControl ItemsSource="{Binding CodeResult.Questions}" Margin="0,8,0,0"><ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding StringFormat=• {0}}" Foreground="#8A5B00"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                  </StackPanel>
+                </Border>
+              </StackPanel>
+              <TextBlock Text="{Binding Text}" TextWrapping="Wrap" Foreground="#9AA4B2" FontSize="11.5" FontStyle="Italic" MaxWidth="680">
+                <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsTransientStatus}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
+              </TextBlock>
+            </StackPanel>
+          </Grid>
+        </Border>
+      </StackPanel>
+    </DataTemplate>
   </Window.Resources>
 
   <Grid>
@@ -439,6 +699,12 @@
     </Border>
 
     <Grid Grid.Column="1" Grid.Row="1" Background="#F5F6F8">
+      <ListBox x:Name="AirBubbleChatList"
+               Style="{StaticResource ChatHistoryList}"
+               ItemContainerStyle="{StaticResource ChatHistoryItem}"
+               HorizontalContentAlignment="Stretch"
+               ItemTemplateSelector="{StaticResource ChatTimelineItemSelector}"
+               Loaded="AirBubbleChatList_OnLoaded"/>
       <ListBox x:Name="ManagerChatList" ItemsSource="{Binding ChatEntries}" Style="{StaticResource ChatHistoryList}" ItemContainerStyle="{StaticResource ChatHistoryItem}" HorizontalContentAlignment="Stretch" Loaded="ManagerChatList_OnLoaded">
           <ListBox.ItemTemplate>
             <DataTemplate>
@@ -549,7 +815,7 @@
                         <ItemsControl.ItemTemplate>
                           <DataTemplate>
                             <Grid>
-                              <local:AdaptiveMarkdownPresenter Markdown="{Binding Text}" DeferWhileStreaming="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Foreground="#172033" FontFamily="华文中宋" FontSize="14" HorizontalAlignment="Left" Margin="0,0,0,5">
+                              <local:AdaptiveMarkdownPresenter Markdown="{Binding Text}" DeferWhileStreaming="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Foreground="#172033" FontFamily="华文中宋" FontSize="14" HorizontalAlignment="Left" Margin="0">
                                 <local:AdaptiveMarkdownPresenter.Style>
                                   <Style TargetType="local:AdaptiveMarkdownPresenter">
                                     <Setter Property="Visibility" Value="Collapsed"/>

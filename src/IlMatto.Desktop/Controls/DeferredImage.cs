@@ -18,6 +18,21 @@ public sealed class DeferredImage : WpfImage
     public static readonly DependencyProperty DeferLoadingProperty = DependencyProperty.Register(
         nameof(DeferLoading), typeof(bool), typeof(DeferredImage), new PropertyMetadata(false, OnDeferLoadingChanged));
 
+    public DeferredImage()
+    {
+        Loaded += (_, _) =>
+        {
+            if (!DeferLoading && Source is null) LoadImage();
+        };
+        Unloaded += (_, _) =>
+        {
+            // The timeline removes distant message rows. Releasing the
+            // detached bitmap here keeps the visual subtree's memory bounded;
+            // the source is loaded again when the row re-enters the viewport.
+            Source = null;
+        };
+    }
+
     public string ImagePath
     {
         get => (string)GetValue(ImagePathProperty);

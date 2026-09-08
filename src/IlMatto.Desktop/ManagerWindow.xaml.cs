@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -24,12 +25,31 @@ public partial class ManagerWindow : Window
     private bool _emojiPickerInitializing;
     private StackPanel? _recentEmojiSection;
     private ScrollViewer? _managerChatScrollViewer;
+    private ScrollViewer? _airBubbleChatScrollViewer;
+    private ChatTimelineController? _chatTimelineController;
+    private readonly ObservableCollection<object> _chatTimelineItems = new();
+    private readonly bool _useAirBubbleTimeline;
+    private readonly ManagerLayoutCacheRecorder _layoutCacheRecorder;
 
     public ManagerWindow()
     {
         InitializeComponent();
         var viewModel = new ManagerViewModel();
+        // The placeholder timeline is the default phase-two path. Setting
+        // ILMATTO_CHAT_RENDER_MODE=full or =air temporarily overrides the
+        // persisted setting for profiling and visual regression diagnostics.
+        var renderModeOverride = Environment.GetEnvironmentVariable("ILMATTO_CHAT_RENDER_MODE");
+        _useAirBubbleTimeline = renderModeOverride?.Equals("full", StringComparison.OrdinalIgnoreCase) == true
+            ? false
+            : renderModeOverride?.Equals("air", StringComparison.OrdinalIgnoreCase) == true
+                ? true
+                : !viewModel.UseFullChatRendering;
+        ManagerChatList.Visibility = _useAirBubbleTimeline ? Visibility.Collapsed : Visibility.Visible;
+        AirBubbleChatList.Visibility = _useAirBubbleTimeline ? Visibility.Visible : Visibility.Collapsed;
+        AirBubbleChatList.ItemsSource = _chatTimelineItems;
+        _layoutCacheRecorder = new ManagerLayoutCacheRecorder(ManagerChatList);
         DataContext = viewModel;
+        if (!_useAirBubbleTimeline) _layoutCacheRecorder.SetConversation(viewModel.SelectedConversation);
         viewModel.PropertyChanged += ViewModelOnPropertyChanged;
         viewModel.SettingsRequested += OpenSettings;
         viewModel.OpenPiWorkbenchRequested += OpenPiWorkbench;
@@ -39,13 +59,20 @@ public partial class ManagerWindow : Window
         Loaded += async (_, _) =>
         {
             await viewModel.InitializeAsync();
+            if (_useAirBubbleTimeline)
+                _chatTimelineController?.SetEntries(viewModel.ChatEntries, viewModel.SelectedConversation?.SessionId);
             await Dispatcher.InvokeAsync(() => GetChatScrollViewer()?.ScrollToEnd(), DispatcherPriority.Background);
             // FlowDocument and Emoji.Wpf initialization is expensive only once
             // per process. Schedule it after the window is responsive so the
             // first historical conversation does not pay that setup cost.
             _ = Dispatcher.BeginInvoke(MarkdownViewer.WarmUp, DispatcherPriority.ApplicationIdle);
         };
-        Closed += (_, _) => DisposeManagerChatScrollViewer();
+        Closed += (_, _) =>
+        {
+            _layoutCacheRecorder.Dispose();
+            _chatTimelineController?.Dispose();
+            DisposeManagerChatScrollViewer();
+        };
     }
 
     private void OpenPiWorkbench()
@@ -118,6 +145,17 @@ public partial class ManagerWindow : Window
         }
         if (e.PropertyName is nameof(ManagerViewModel.ChatEntries) or nameof(ManagerViewModel.SelectedConversation))
         {
+            if (sender is ManagerViewModel viewModel)
+            {
+                if (_useAirBubbleTimeline)
+                    _chatTimelineController?.SetEntries(viewModel.ChatEntries, viewModel.SelectedConversation?.SessionId);
+                else
+                    _layoutCacheRecorder.SetConversation(viewModel.SelectedConversation);
+            }
+            else if (!_useAirBubbleTimeline)
+            {
+                _layoutCacheRecorder.Schedule();
+            }
             Dispatcher.BeginInvoke(() => GetChatScrollViewer()?.ScrollToEnd(), DispatcherPriority.Background);
         }
     }
@@ -139,10 +177,46 @@ public partial class ManagerWindow : Window
 
     private void ManagerChatList_OnLoaded(object sender, RoutedEventArgs e)
     {
+        if (_useAirBubbleTimeline) return;
+        _layoutCacheRecorder.Schedule();
         if (_managerChatScrollViewer is not null) return;
         _managerChatScrollViewer = FindVisualChild<ScrollViewer>(ManagerChatList);
         if (_managerChatScrollViewer is null) return;
         _managerChatScrollViewer.ScrollChanged += ManagerChatScrollViewer_OnScrollChanged;
+    }
+
+    private void AirBubbleChatList_OnLoaded(object sender, RoutedEventArgs e)
+    {
+        if (!_useAirBubbleTimeline || _airBubbleChatScrollViewer is not null) return;
+        _airBubbleChatScrollViewer = FindVisualChild<ScrollViewer>(AirBubbleChatList);
+        if (_airBubbleChatScrollViewer is null) return;
+
+        _airBubbleChatScrollViewer.ScrollChanged += ManagerChatScrollViewer_OnScrollChanged;
+        _chatTimelineController = new ChatTimelineController(AirBubbleChatList, _airBubbleChatScrollViewer, _chatTimelineItems);
+        // Phase-three timeline: rows begin as fixed-height shells and the
+        // controller promotes only viewport-near rows to the full Markdown /
+        // image template. The full ListBox remains available for profiling.
+        _chatTimelineController.PlaceholderOnly = false;
+        _chatTimelineController.Attach();
+        if (DataContext is ManagerViewModel viewModel)
+            _chatTimelineController.SetEntries(viewModel.ChatEntries, viewModel.SelectedConversation?.SessionId);
+    }
+
+    private void ChatHistoryItem_OnLoaded(object sender, RoutedEventArgs e)
+    {
+        if (!_useAirBubbleTimeline) _layoutCacheRecorder.Schedule();
+    }
+
+    private void ChatHistoryItem_OnSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (!_useAirBubbleTimeline) _layoutCacheRecorder.Schedule();
+    }
+
+    private void ChatTimelinePresenter_OnNaturalHeightMeasured(object sender, ChatMessageMeasuredEventArgs e)
+    {
+        if (sender is ReservedMessagePresenter presenter &&
+            presenter.DataContext is ChatTimelineMessageRow row)
+            _chatTimelineController?.RecordNaturalContentHeight(row, e);
     }
 
     private void DisposeManagerChatScrollViewer()
@@ -150,9 +224,17 @@ public partial class ManagerWindow : Window
         if (_managerChatScrollViewer is not null)
             _managerChatScrollViewer.ScrollChanged -= ManagerChatScrollViewer_OnScrollChanged;
         _managerChatScrollViewer = null;
+        if (_airBubbleChatScrollViewer is not null)
+            _airBubbleChatScrollViewer.ScrollChanged -= ManagerChatScrollViewer_OnScrollChanged;
+        _airBubbleChatScrollViewer = null;
     }
 
-    private ScrollViewer? GetChatScrollViewer() => _managerChatScrollViewer ??= FindVisualChild<ScrollViewer>(ManagerChatList);
+    private ScrollViewer? GetChatScrollViewer()
+    {
+        if (_useAirBubbleTimeline)
+            return _airBubbleChatScrollViewer ??= FindVisualChild<ScrollViewer>(AirBubbleChatList);
+        return _managerChatScrollViewer ??= FindVisualChild<ScrollViewer>(ManagerChatList);
+    }
 
     private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
     {

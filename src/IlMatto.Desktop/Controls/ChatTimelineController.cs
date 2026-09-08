@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using IlMatto.Desktop.Infrastructure;
 using IlMatto.Desktop.Models;
 using WpfListBox = System.Windows.Controls.ListBox;
 
@@ -29,13 +30,17 @@ internal sealed class ChatTimelineController : IDisposable
     private readonly ChatTimelineSpacer _topSpacer = new();
     private readonly ChatTimelineSpacer _bottomSpacer = new();
     private readonly Dictionary<ManagerChatEntry, ChatTimelineMessageRow> _rows = new();
-    private readonly Queue<ChatTimelineMessageRow> _renderQueue = new();
+    private readonly Dictionary<ManagerChatEntry, double> _persistentBubbleHeights = new();
+    private readonly Dictionary<ManagerChatEntry, double> _persistentBubbleWidths = new();
+    private readonly PriorityQueue<ChatTimelineMessageRow, double> _renderQueue = new();
 
     private ObservableCollection<ManagerChatEntry>? _entries;
     private int _firstMaterialized = -1;
     private int _lastMaterialized = -1;
     private int _lastWidthBucket = -1;
+    private int _persistentBubbleWidthBucket = -1;
     private int _renderGeneration;
+    private string? _sessionId;
     private bool _isThumbDragging;
     private bool _isDisposed;
     private bool _refreshQueued;
@@ -43,6 +48,14 @@ internal sealed class ChatTimelineController : IDisposable
     private bool _applyingAnchorCompensation;
     private double _pendingAnchorDelta;
     private DateTime _lastScrollActivityUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// The air timeline initially creates fixed-height shells. Once a row is
+    /// close to the viewport, the render scheduler promotes it to the full
+    /// content template. The full-list diagnostic path remains available in
+    /// the window for comparing Markdown costs.
+    /// </summary>
+    public bool PlaceholderOnly { get; set; }
 
     public ChatTimelineController(WpfListBox list, ScrollViewer scrollViewer, ObservableCollection<object> items)
     {
@@ -61,8 +74,11 @@ internal sealed class ChatTimelineController : IDisposable
     }
 
     public void SetEntries(ObservableCollection<ManagerChatEntry> entries)
+        => SetEntries(entries, null);
+
+    public void SetEntries(ObservableCollection<ManagerChatEntry> entries, string? sessionId)
     {
-        if (ReferenceEquals(_entries, entries))
+        if (ReferenceEquals(_entries, entries) && string.Equals(_sessionId, sessionId, StringComparison.Ordinal))
         {
             SynchronizeLayout(preserveAnchor: true);
             RefreshVisibleItems();
@@ -70,13 +86,19 @@ internal sealed class ChatTimelineController : IDisposable
         }
 
         UnsubscribeEntries();
+        CancelQueuedRendering();
         _entries = entries;
+        _sessionId = sessionId;
         _entries.CollectionChanged += EntriesOnCollectionChanged;
         foreach (var entry in entries) entry.PropertyChanged += EntryOnPropertyChanged;
 
         _rows.Clear();
+        _persistentBubbleHeights.Clear();
+        _persistentBubbleWidths.Clear();
+        _persistentBubbleWidthBucket = -1;
         _firstMaterialized = _lastMaterialized = -1;
         _items.Clear();
+        ImportPersistentHeights(entries, sessionId);
         SynchronizeLayout(preserveAnchor: false);
         // A newly selected short historical session must never inherit the
         // previous session's large pixel offset. The window schedules its
@@ -91,6 +113,9 @@ internal sealed class ChatTimelineController : IDisposable
         _isThumbDragging = true;
         _lastScrollActivityUtc = DateTime.UtcNow;
         CancelQueuedRendering();
+        foreach (var row in _items.OfType<ChatTimelineMessageRow>())
+            if (!row.Entry.IsStreamingText && !row.Entry.IsThinking)
+                row.RenderContent = false;
     }
 
     public void CompleteThumbDrag()
@@ -111,8 +136,23 @@ internal sealed class ChatTimelineController : IDisposable
         if (Math.Abs(delta) < HeightEpsilon) return;
 
         row.ReservedHeight = _layout.GetHeight(row.Index);
+        row.ReservedContentHeight = GetContentHeight(row.Entry, row.Index);
         UpdateSpacerHeights();
         QueueSafeAnchorCompensation(row.Index, delta);
+    }
+
+    public void RecordNaturalContentHeight(ChatTimelineMessageRow row, ChatMessageMeasuredEventArgs measurement)
+    {
+        if (_isDisposed || _entries is null || !ReferenceEquals(row.Entry, measurement.Entry)) return;
+        if (row.Index < 0 || row.Index >= _layout.Count || !ReferenceEquals(_layout[row.Index], row.Entry)) return;
+
+        // The presenter measures only the content below the header. Convert it
+        // back to the logical row height before updating the Fenwick index.
+        var rowOverhead = Math.Max(0, row.ReservedHeight - row.ReservedContentHeight);
+        RecordNaturalHeight(row, new ChatMessageMeasuredEventArgs(
+            measurement.Entry,
+            measurement.Height + rowOverhead,
+            measurement.Width));
     }
 
     public void Dispose()
@@ -154,9 +194,13 @@ internal sealed class ChatTimelineController : IDisposable
         if (_rows.TryGetValue(entry, out var row))
         {
             row.ReservedHeight = _layout.GetHeight(row.Index);
-            // A change to an existing message must be measured again. This is
-            // also how the plain streamed text is promoted to final Markdown.
-            row.RenderContent = true;
+            row.ReservedContentHeight = GetContentHeight(entry, row.Index);
+            row.ReservedBubbleHeight = GetBubbleHeight(entry, row.Index);
+            row.ReservedBubbleWidth = GetBubbleWidth(entry);
+            // Streaming updates remain live, while a completed message is
+            // promoted by the viewport scheduler instead of rebuilding a
+            // distant row immediately.
+            if (entry.IsStreamingText || entry.IsThinking) row.RenderContent = true;
         }
         UpdateSpacerHeights();
         QueueRefresh();
@@ -167,6 +211,9 @@ internal sealed class ChatTimelineController : IDisposable
         var bucket = ChatMessageLayoutCache.GetWidthBucket(GetContentWidth());
         if (bucket != _lastWidthBucket)
         {
+            _persistentBubbleHeights.Clear();
+            _persistentBubbleWidths.Clear();
+            _persistentBubbleWidthBucket = -1;
             SynchronizeLayout(preserveAnchor: true);
             _lastWidthBucket = bucket;
         }
@@ -223,6 +270,7 @@ internal sealed class ChatTimelineController : IDisposable
         SynchronizeLayout(preserveAnchor: true);
         if (_layout.Count == 0)
         {
+            CancelQueuedRendering();
             _items.Clear();
             _firstMaterialized = _lastMaterialized = -1;
             return;
@@ -234,6 +282,7 @@ internal sealed class ChatTimelineController : IDisposable
         var start = _layout.FindIndexAtOffset(Math.Max(0, offset - overscan));
         var end = _layout.FindIndexAtOffset(Math.Min(Math.Max(0, _layout.TotalHeight - 0.001), offset + viewport + overscan));
         ReconcileMaterializedRange(start, end);
+        QueueVisiblePlaceholderRowsForRendering();
     }
 
     private void ReconcileMaterializedRange(int start, int end)
@@ -241,6 +290,17 @@ internal sealed class ChatTimelineController : IDisposable
         if (_layout.Count == 0) return;
         start = Math.Clamp(start, 0, _layout.Count - 1);
         end = Math.Clamp(end, start, _layout.Count - 1);
+
+        // Rows that are no longer near the viewport keep their model and
+        // measured geometry, but release the expensive content template. A
+        // later visit will enqueue them again instead of retaining a large
+        // Markdown visual tree for the whole conversation.
+        foreach (var row in _rows.Values)
+        {
+            if (!row.Entry.IsStreamingText && !row.Entry.IsThinking &&
+                (row.Index < start || row.Index > end))
+                row.RenderContent = false;
+        }
 
         // A large jump (especially during startup or thumb dragging) can make
         // the old and new view windows disjoint. Removing rows one by one in
@@ -318,13 +378,16 @@ internal sealed class ChatTimelineController : IDisposable
         {
             row.Index = index;
             row.ReservedHeight = _layout.GetHeight(index);
+            row.ReservedContentHeight = GetContentHeight(entry, index);
+            row.ReservedBubbleHeight = GetBubbleHeight(entry, index);
+            row.ReservedBubbleWidth = GetBubbleWidth(entry);
             return row;
         }
 
-        var measured = _layout.IsMeasured(index, GetContentWidth());
-        // Existing content remains alive during a drag. Only newly entered,
-        // already-measured rows use a blank fixed-height shell until release.
-        row = new ChatTimelineMessageRow(entry, index, _layout.GetHeight(index), renderContent: !_isThumbDragging || !measured);
+        // Always start with a fixed-height shell. The viewport scheduler below
+        // decides when the expensive Markdown/image template may be created.
+        row = new ChatTimelineMessageRow(entry, index, _layout.GetHeight(index), GetContentHeight(entry, index),
+            GetBubbleHeight(entry, index), GetBubbleWidth(entry), renderContent: false);
         _rows.Add(entry, row);
         return row;
     }
@@ -339,12 +402,28 @@ internal sealed class ChatTimelineController : IDisposable
     private void QueueVisiblePlaceholderRowsForRendering()
     {
         CancelQueuedRendering();
-        if (_firstMaterialized < 0) return;
-        var anchor = _layout.FindIndexAtOffset(_scrollViewer.VerticalOffset);
+        if (PlaceholderOnly || _isThumbDragging || _firstMaterialized < 0) return;
+
+        var viewport = Math.Max(1, _scrollViewer.ViewportHeight > 0 ? _scrollViewer.ViewportHeight : _list.ActualHeight);
+        var offset = Math.Clamp(_scrollViewer.VerticalOffset, 0, Math.Max(0, _layout.TotalHeight - viewport));
+        var visibleStart = _layout.FindIndexAtOffset(offset);
+        var visibleEnd = _layout.FindIndexAtOffset(Math.Min(
+            Math.Max(0, _layout.TotalHeight - 0.001), offset + viewport));
         var rows = _items.OfType<ChatTimelineMessageRow>()
             .Where(row => !row.RenderContent)
-            .OrderBy(row => Math.Abs(row.Index - anchor));
-        foreach (var row in rows) _renderQueue.Enqueue(row);
+            .Select(row =>
+            {
+                var distance = row.Index < visibleStart
+                    ? visibleStart - row.Index
+                    : row.Index > visibleEnd
+                        ? row.Index - visibleEnd
+                        : 0;
+                return (row, distance);
+            })
+            .OrderBy(item => item.distance)
+            .ThenBy(item => item.row.Index);
+        foreach (var (row, distance) in rows)
+            _renderQueue.Enqueue(row, distance);
         ScheduleRenderBatch(_renderGeneration);
     }
 
@@ -366,8 +445,10 @@ internal sealed class ChatTimelineController : IDisposable
         var rendered = 0;
         while (rendered < 2 && _renderQueue.Count > 0)
         {
-            var row = _renderQueue.Dequeue();
-            if (!_items.Contains(row) || row.RenderContent) continue;
+            if (!_renderQueue.TryDequeue(out var row, out _)) break;
+            if (!_items.Contains(row) || row.RenderContent ||
+                row.Index < _firstMaterialized || row.Index > _lastMaterialized)
+                continue;
             row.RenderContent = true;
             rendered++;
         }
@@ -413,6 +494,67 @@ internal sealed class ChatTimelineController : IDisposable
                                  _scrollViewer.VerticalOffset >= _scrollViewer.ExtentHeight - _scrollViewer.ViewportHeight - 8;
 
     private double GetContentWidth() => Math.Max(1, _list.ActualWidth - _list.Padding.Left - _list.Padding.Right);
+
+    private void ImportPersistentHeights(IReadOnlyList<ManagerChatEntry> entries, string? sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId)) return;
+
+        var width = GetContentWidth();
+        var widthBucket = ChatMessageLayoutCache.GetWidthBucket(width);
+        if (!ManagerLayoutCacheStore.TryLoad(
+                sessionId,
+                widthBucket,
+                out var persisted))
+            return;
+
+        _layoutCache.ImportMeasuredHeights(entries, width, persisted);
+        foreach (var pair in persisted)
+        {
+            if (pair.Key < 0 || pair.Key >= entries.Count) continue;
+            var bubbleHeight = pair.Value.BubbleHeight;
+            if (!double.IsFinite(bubbleHeight) || bubbleHeight < 24) continue;
+            _persistentBubbleHeights[entries[pair.Key]] = Math.Clamp(bubbleHeight, 24, 12000);
+
+            var bubbleWidth = pair.Value.BubbleWidth;
+            if (double.IsFinite(bubbleWidth) && bubbleWidth >= 24)
+                _persistentBubbleWidths[entries[pair.Key]] = Math.Clamp(bubbleWidth, 24, 12000);
+        }
+        _persistentBubbleWidthBucket = widthBucket;
+    }
+
+    private double GetBubbleHeight(ManagerChatEntry entry, int index)
+    {
+        var widthBucket = ChatMessageLayoutCache.GetWidthBucket(GetContentWidth());
+        if (_persistentBubbleWidthBucket == widthBucket && _persistentBubbleHeights.TryGetValue(entry, out var cached))
+            return cached;
+
+        var rowHeight = _layout.GetHeight(index);
+        var nonBubbleHeight = entry.ShowDateSeparator ? 78 : 30;
+        return Math.Clamp(rowHeight - nonBubbleHeight, 28, Math.Max(28, rowHeight));
+    }
+
+    private double GetContentHeight(ManagerChatEntry entry, int index)
+    {
+        var rowHeight = _layout.GetHeight(index);
+        var nonContentHeight = entry.ShowDateSeparator ? 78 : 30;
+        var contentHeight = Math.Clamp(rowHeight - nonContentHeight, 28, Math.Max(28, rowHeight));
+
+        // The air row renders the name/time header outside the presenter. The
+        // persisted row height also includes that header, so reserve its
+        // stable footprint here before attaching Markdown and images.
+        if (!entry.IsTransientStatus) contentHeight = Math.Max(28, contentHeight - 28);
+        return contentHeight;
+    }
+
+    private double GetBubbleWidth(ManagerChatEntry entry)
+    {
+        var widthBucket = ChatMessageLayoutCache.GetWidthBucket(GetContentWidth());
+        if (_persistentBubbleWidthBucket == widthBucket && _persistentBubbleWidths.TryGetValue(entry, out var cached))
+            return cached;
+
+        var maximum = Math.Max(150, GetContentWidth() * 0.6666667);
+        return Math.Min(280, maximum);
+    }
 
     private void UnsubscribeEntries()
     {

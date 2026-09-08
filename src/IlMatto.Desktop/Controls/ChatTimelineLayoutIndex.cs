@@ -1,4 +1,5 @@
 using IlMatto.Desktop.Models;
+using IlMatto.Desktop.Infrastructure;
 
 namespace IlMatto.Desktop.Controls;
 
@@ -39,6 +40,30 @@ internal sealed class ChatMessageLayoutCache
             _entries.Add(entry, cached);
         }
         cached.Measured[GetWidthBucket(width)] = Math.Clamp(height, 24, 12000);
+    }
+
+    public void ImportMeasuredHeights(
+        IReadOnlyList<ManagerChatEntry> entries,
+        double width,
+        IReadOnlyDictionary<int, ManagerMessageLayoutCacheEntry> persisted)
+    {
+        var bucket = GetWidthBucket(width);
+        foreach (var pair in persisted)
+        {
+            if (pair.Key < 0 || pair.Key >= entries.Count) continue;
+            var height = pair.Value.RowHeight;
+            if (!double.IsFinite(height) || height < 24) continue;
+
+            var entry = entries[pair.Key];
+            if (entry.IsStreamingText || entry.IsThinking) continue;
+            if (!_entries.TryGetValue(entry, out var cached))
+            {
+                cached = new EntryHeights();
+                _entries.Add(entry, cached);
+            }
+
+            cached.Measured[bucket] = Math.Clamp(height, 24, 12000);
+        }
     }
 
     public void Invalidate(ManagerChatEntry entry) => _entries.Remove(entry);

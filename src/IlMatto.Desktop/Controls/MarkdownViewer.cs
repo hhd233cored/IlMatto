@@ -498,6 +498,26 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
                 }
             }
 
+            // Paragraphs keep a small bottom margin so adjacent Markdown
+            // blocks remain visually separated. The final block is different:
+            // its bottom margin appears as an extra blank line at the bottom
+            // of an agent bubble, unlike a normal TextBlock message.
+            switch (document.Blocks.LastBlock)
+            {
+                case Paragraph lastParagraph:
+                {
+                    var margin = lastParagraph.Margin;
+                    lastParagraph.Margin = new Thickness(margin.Left, margin.Top, margin.Right, 0);
+                    break;
+                }
+                case Table lastTable:
+                {
+                    var margin = lastTable.Margin;
+                    lastTable.Margin = new Thickness(margin.Left, margin.Top, margin.Right, 0);
+                    break;
+                }
+            }
+
             // WPF's default text renderer often falls back to monochrome glyph
             // outlines for Segoe UI Emoji. Emoji.Wpf replaces supported emoji
             // runs with vector inlines built from the color glyph layers that
