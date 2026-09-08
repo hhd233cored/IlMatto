@@ -549,42 +549,16 @@
                         <ItemsControl.ItemTemplate>
                           <DataTemplate>
                             <Grid>
-                              <!-- Streaming text intentionally stays plain: parsing and
-                                   constructing a FlowDocument for every delta is much
-                                   more expensive than the delta itself.  The terminal
-                                   event switches this back to Markdown in one render. -->
-                              <TextBlock Text="{Binding Text}" Foreground="#172033" FontFamily="华文中宋" FontSize="14" TextWrapping="Wrap" HorizontalAlignment="Left" Margin="0,0,0,5">
-                                <TextBlock.Style>
-                                  <Style TargetType="TextBlock">
+                              <local:AdaptiveMarkdownPresenter Markdown="{Binding Text}" DeferWhileStreaming="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Foreground="#172033" FontFamily="华文中宋" FontSize="14" HorizontalAlignment="Left" Margin="0,0,0,5">
+                                <local:AdaptiveMarkdownPresenter.Style>
+                                  <Style TargetType="local:AdaptiveMarkdownPresenter">
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                     <Style.Triggers>
-                                      <MultiDataTrigger>
-                                        <MultiDataTrigger.Conditions>
-                                          <Condition Binding="{Binding IsText}" Value="True"/>
-                                          <Condition Binding="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True"/>
-                                        </MultiDataTrigger.Conditions>
-                                        <Setter Property="Visibility" Value="Visible"/>
-                                      </MultiDataTrigger>
+                                      <DataTrigger Binding="{Binding IsText}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
                                     </Style.Triggers>
                                   </Style>
-                                </TextBlock.Style>
-                              </TextBlock>
-                              <local:MarkdownViewer DeferWhileStreaming="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Markdown="{Binding Text}" Foreground="#172033" FontSize="14" HorizontalAlignment="Left" Margin="0,0,0,5">
-                                <local:MarkdownViewer.Style>
-                                  <Style TargetType="local:MarkdownViewer">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                    <Style.Triggers>
-                                      <MultiDataTrigger>
-                                        <MultiDataTrigger.Conditions>
-                                          <Condition Binding="{Binding IsText}" Value="True"/>
-                                          <Condition Binding="{Binding DataContext.IsStreamingText, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="False"/>
-                                        </MultiDataTrigger.Conditions>
-                                        <Setter Property="Visibility" Value="Visible"/>
-                                      </MultiDataTrigger>
-                                    </Style.Triggers>
-                                  </Style>
-                                </local:MarkdownViewer.Style>
-                              </local:MarkdownViewer>
+                                </local:AdaptiveMarkdownPresenter.Style>
+                              </local:AdaptiveMarkdownPresenter>
                               <Expander Visibility="{Binding HasVisibleOperations, Converter={StaticResource BooleanToVisibilityConverter}}" Style="{StaticResource ProcessExpander}" IsExpanded="{Binding IsExpanded, Mode=TwoWay}" HorizontalAlignment="Stretch" Background="Transparent" BorderThickness="0" Padding="0" Margin="0,2,0,2">
                                 <Expander.Header>
                                   <Grid MinHeight="22" MaxWidth="690" HorizontalAlignment="Left">

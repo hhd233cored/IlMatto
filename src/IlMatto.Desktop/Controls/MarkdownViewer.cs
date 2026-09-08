@@ -47,6 +47,7 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
     private double _naturalWidthPixelsPerDip = double.NaN;
     private double _naturalWidth;
     private double _deferredNaturalWidth;
+    private static int _isWarmedUp;
 
     public MarkdownViewer()
     {
@@ -70,6 +71,33 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
         contextMenu.Items.Add(selectAllItem);
         ContextMenu = contextMenu;
         Document = CreateDocument();
+    }
+
+    /// <summary>
+    /// Initializes the WPF FlowDocument and color-emoji paths during an idle
+    /// frame. This moves one-time typeface and glyph setup away from the first
+    /// history-session switch without retaining a UI object afterwards.
+    /// </summary>
+    public static void WarmUp()
+    {
+        if (Interlocked.Exchange(ref _isWarmedUp, 1) != 0) return;
+        try
+        {
+            var viewer = new MarkdownViewer
+            {
+                Markdown = "预热 🙂",
+                FontSize = 14,
+                Width = 320,
+            };
+            viewer.Measure(new WpfSize(320, double.PositiveInfinity));
+            viewer.Arrange(new Rect(0, 0, 320, viewer.DesiredSize.Height));
+            viewer.UpdateLayout();
+        }
+        catch
+        {
+            // Warming up is an optional performance improvement. Rendering an
+            // actual chat message remains the correctness fallback.
+        }
     }
 
     public string Markdown

@@ -36,7 +36,15 @@ public partial class ManagerWindow : Window
         viewModel.UserMessageSent += UserMessageSent;
         SourceInitialized += (_, _) => FitWindowToWorkArea();
         _followTimer.Tick += (_, _) => { if (DataContext is ManagerViewModel { IsBusy: true } && _followTail) GetChatScrollViewer()?.ScrollToEnd(); else _followTimer.Stop(); };
-        Loaded += async (_, _) => { await viewModel.InitializeAsync(); await Dispatcher.InvokeAsync(() => GetChatScrollViewer()?.ScrollToEnd(), DispatcherPriority.Background); };
+        Loaded += async (_, _) =>
+        {
+            await viewModel.InitializeAsync();
+            await Dispatcher.InvokeAsync(() => GetChatScrollViewer()?.ScrollToEnd(), DispatcherPriority.Background);
+            // FlowDocument and Emoji.Wpf initialization is expensive only once
+            // per process. Schedule it after the window is responsive so the
+            // first historical conversation does not pay that setup cost.
+            _ = Dispatcher.BeginInvoke(MarkdownViewer.WarmUp, DispatcherPriority.ApplicationIdle);
+        };
         Closed += (_, _) => DisposeManagerChatScrollViewer();
     }
 
