@@ -1,11 +1,13 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using EmojiDataModel = Emoji.Wpf.EmojiData;
 using EmojiTextBlock = Emoji.Wpf.TextBlock;
+using IlMatto.Desktop.Controls;
 using IlMatto.Desktop.Models;
 using WpfButton = System.Windows.Controls.Button;
 
@@ -23,6 +25,8 @@ public partial class ManagerWindow : Window
     private bool _emojiPickerInitializing;
     private StackPanel? _recentEmojiSection;
     private ScrollViewer? _managerChatScrollViewer;
+    private ChatLayoutStabilityController? _chatLayoutStabilityController;
+    private Thumb? _managerChatScrollThumb;
 
     public ManagerWindow()
     {
@@ -36,6 +40,7 @@ public partial class ManagerWindow : Window
         SourceInitialized += (_, _) => FitWindowToWorkArea();
         _followTimer.Tick += (_, _) => { if (DataContext is ManagerViewModel { IsBusy: true } && _followTail) GetChatScrollViewer()?.ScrollToEnd(); else _followTimer.Stop(); };
         Loaded += async (_, _) => { await viewModel.InitializeAsync(); await Dispatcher.InvokeAsync(() => GetChatScrollViewer()?.ScrollToEnd(), DispatcherPriority.Background); };
+        Closed += (_, _) => DisposeChatLayoutStabilityController();
     }
 
     private void OpenPiWorkbench()
@@ -131,6 +136,37 @@ public partial class ManagerWindow : Window
         _managerChatScrollViewer = FindVisualChild<ScrollViewer>(ManagerChatList);
         if (_managerChatScrollViewer is null) return;
         _managerChatScrollViewer.ScrollChanged += ManagerChatScrollViewer_OnScrollChanged;
+        _chatLayoutStabilityController = new ChatLayoutStabilityController(ManagerChatList, _managerChatScrollViewer);
+        _chatLayoutStabilityController.Attach();
+        _managerChatScrollThumb = FindVisualChild<Thumb>(_managerChatScrollViewer);
+        if (_managerChatScrollThumb is not null)
+        {
+            _managerChatScrollThumb.DragStarted += ManagerChatScrollThumb_OnDragStarted;
+            _managerChatScrollThumb.DragCompleted += ManagerChatScrollThumb_OnDragCompleted;
+        }
+    }
+
+    private void ManagerChatScrollThumb_OnDragStarted(object sender, DragStartedEventArgs e)
+    {
+        // Dragging history must not compete with the live response's tail
+        // follow. The stabilizer still renders full Markdown in real time.
+        _followTail = false;
+        _chatLayoutStabilityController?.BeginThumbDrag();
+    }
+
+    private void ManagerChatScrollThumb_OnDragCompleted(object sender, DragCompletedEventArgs e) =>
+        _chatLayoutStabilityController?.CompleteThumbDrag();
+
+    private void DisposeChatLayoutStabilityController()
+    {
+        if (_managerChatScrollThumb is not null)
+        {
+            _managerChatScrollThumb.DragStarted -= ManagerChatScrollThumb_OnDragStarted;
+            _managerChatScrollThumb.DragCompleted -= ManagerChatScrollThumb_OnDragCompleted;
+            _managerChatScrollThumb = null;
+        }
+        _chatLayoutStabilityController?.Dispose();
+        _chatLayoutStabilityController = null;
     }
 
     private ScrollViewer? GetChatScrollViewer() => _managerChatScrollViewer ??= FindVisualChild<ScrollViewer>(ManagerChatList);
