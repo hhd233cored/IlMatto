@@ -53,16 +53,37 @@ public sealed class AdaptiveMarkdownPresenter : ContentControl
 
         if (kind is MarkdownPresentationKind.Plain)
         {
-            if (Content is EmojiTextBlock existing)
+            // Emoji.Wpf is intentionally reserved for actual emoji. Its color
+            // glyph substitution is valuable for 🙂, but unnecessary for the
+            // overwhelmingly common Chinese-prose path.
+            if (EmojiTextSupport.ContainsEmoji(markdown))
             {
-                existing.Text = markdown;
+                if (Content is EmojiTextBlock emojiTextBlock)
+                {
+                    emojiTextBlock.Text = markdown;
+                    return;
+                }
+
+                Content = new EmojiTextBlock
+                {
+                    Text = markdown,
+                    ColorBlend = true,
+                    TextWrapping = TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Left,
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+                };
                 return;
             }
 
-            Content = new EmojiTextBlock
+            if (Content is TextBlock textBlock && Content is not EmojiTextBlock)
+            {
+                textBlock.Text = markdown;
+                return;
+            }
+
+            Content = new TextBlock
             {
                 Text = markdown,
-                ColorBlend = true,
                 TextWrapping = TextWrapping.Wrap,
                 TextAlignment = TextAlignment.Left,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Left,

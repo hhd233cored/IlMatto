@@ -83,7 +83,7 @@ public sealed class InlineMarkdownTextBlock : TextBlock
             var run = new Run(lines[index]);
             configure?.Invoke(run);
             inlines.Add(run);
-            if (MayContainEmoji(lines[index]))
+            if (EmojiTextSupport.ContainsEmoji(lines[index]))
             {
                 try { Emoji.Wpf.FlowDocumentExtensions.SubstituteGlyphs(run); }
                 catch { /* Keep the text glyph fallback if color substitution is unavailable. */ }
@@ -92,14 +92,6 @@ public sealed class InlineMarkdownTextBlock : TextBlock
         }
     }
 
-    private static bool MayContainEmoji(string value)
-    {
-        foreach (var character in value)
-        {
-            if (char.IsSurrogate(character) || character is >= '\u2300' and <= '\u33FF') return true;
-        }
-        return false;
-    }
 }
 
 internal enum InlineMarkdownKind { Text, Code, Strike, Strong, Emphasis, Link }

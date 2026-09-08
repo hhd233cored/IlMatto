@@ -215,6 +215,13 @@ public partial class ManagerChatEntry : ObservableObject
     public ObservableCollection<ManagerImageAttachment> Attachments { get; } = new();
     public bool HasAttachments => Attachments.Count > 0;
     public bool HasMessageBody => !string.IsNullOrWhiteSpace(Text) || Segments.Count > 0 || CodeResult is not null;
+    /// <summary>
+    /// Replies above this size are certain to use the bubble width cap in the
+    /// normal Manager layout. The view can therefore skip its otherwise
+    /// redundant unlimited-width measurement pass.
+    /// </summary>
+    [JsonIgnore]
+    public bool ShouldMeasureAtMaxWidth => Text.Length >= 320;
     [ObservableProperty] private string thinkingText = "";
     [ObservableProperty] private bool isThinking;
     [ObservableProperty] private bool thinkingExpanded;
@@ -335,7 +342,11 @@ public partial class ManagerChatEntry : ObservableObject
 
     partial void OnCodeResultChanged(ManagerCodeResult? value) => OnPropertyChanged(nameof(HasMessageBody));
 
-    partial void OnTextChanged(string value) => OnPropertyChanged(nameof(HasMessageBody));
+    partial void OnTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasMessageBody));
+        OnPropertyChanged(nameof(ShouldMeasureAtMaxWidth));
+    }
 
     private static string Excerpt(string? value)
     {

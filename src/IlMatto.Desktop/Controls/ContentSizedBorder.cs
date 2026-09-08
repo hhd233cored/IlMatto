@@ -12,6 +12,21 @@ namespace IlMatto.Desktop.Controls;
 /// </summary>
 public sealed class ContentSizedBorder : Border
 {
+    /// <summary>
+    /// Long chat replies almost always exceed the bubble cap. Measuring them
+    /// once without a width constraint only lays out an unusable extra-long
+    /// line, so callers can opt into one constrained measure instead.
+    /// </summary>
+    public static readonly DependencyProperty MeasureAtMaxWidthProperty = DependencyProperty.Register(
+        nameof(MeasureAtMaxWidth), typeof(bool), typeof(ContentSizedBorder),
+        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsMeasure));
+
+    public bool MeasureAtMaxWidth
+    {
+        get => (bool)GetValue(MeasureAtMaxWidthProperty);
+        set => SetValue(MeasureAtMaxWidthProperty, value);
+    }
+
     protected override WpfSize MeasureOverride(WpfSize constraint)
     {
         if (Child is null)
@@ -27,6 +42,18 @@ public sealed class ContentSizedBorder : Border
         if (!double.IsInfinity(constraint.Width))
         {
             maximumContentWidth = Math.Min(maximumContentWidth, ToContentSize(constraint.Width, horizontalChrome));
+        }
+
+        // The first pass is useful only for short replies, where it produces a
+        // compact bubble. Avoid it for known long replies once the row has a
+        // real width; the constrained pass below is the final layout anyway.
+        if (MeasureAtMaxWidth && maximumContentWidth > 0 && !double.IsInfinity(maximumContentWidth))
+        {
+            Child.Measure(new WpfSize(maximumContentWidth, availableContentHeight));
+            var constrainedWidth = Math.Min(Math.Max(0, Child.DesiredSize.Width), maximumContentWidth);
+            return new WpfSize(
+                constrainedWidth + horizontalChrome,
+                Child.DesiredSize.Height + verticalChrome);
         }
 
         // An unconstrained first pass gives short messages their natural width.
