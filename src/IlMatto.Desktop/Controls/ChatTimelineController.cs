@@ -238,15 +238,20 @@ internal sealed class ChatTimelineController : IDisposable
 
     private void ReconcileMaterializedRange(int start, int end)
     {
-        if (start < 0 || end < start) return;
-        if (_firstMaterialized < 0)
+        if (_layout.Count == 0) return;
+        start = Math.Clamp(start, 0, _layout.Count - 1);
+        end = Math.Clamp(end, start, _layout.Count - 1);
+
+        // A large jump (especially during startup or thumb dragging) can make
+        // the old and new view windows disjoint. Removing rows one by one in
+        // that case eventually tries to remove the bottom spacer as a row.
+        // Rebuild the small materialized window instead. The same recovery is
+        // used if a deferred collection update left the item source out of
+        // sync with the remembered range.
+        if (_firstMaterialized < 0 || end < _firstMaterialized || start > _lastMaterialized ||
+            !HasConsistentMaterializedItems())
         {
-            _items.Clear();
-            _items.Add(_topSpacer);
-            for (var index = start; index <= end; index++) _items.Add(GetOrCreateRow(index));
-            _items.Add(_bottomSpacer);
-            _firstMaterialized = start;
-            _lastMaterialized = end;
+            RebuildMaterializedRange(start, end);
         }
         else
         {
@@ -272,6 +277,38 @@ internal sealed class ChatTimelineController : IDisposable
             }
         }
         UpdateSpacerHeights();
+    }
+
+    private void RebuildMaterializedRange(int start, int end)
+    {
+        _items.Clear();
+        _items.Add(_topSpacer);
+        for (var index = start; index <= end; index++) _items.Add(GetOrCreateRow(index));
+        _items.Add(_bottomSpacer);
+        _firstMaterialized = start;
+        _lastMaterialized = end;
+    }
+
+    private bool HasConsistentMaterializedItems()
+    {
+        if (_firstMaterialized < 0 || _lastMaterialized < _firstMaterialized ||
+            _lastMaterialized >= _layout.Count)
+            return false;
+
+        var rowCount = _lastMaterialized - _firstMaterialized + 1;
+        if (_items.Count != rowCount + 2 || !ReferenceEquals(_items[0], _topSpacer) ||
+            !ReferenceEquals(_items[^1], _bottomSpacer))
+            return false;
+
+        for (var offset = 0; offset < rowCount; offset++)
+        {
+            if (_items[offset + 1] is not ChatTimelineMessageRow row ||
+                row.Index != _firstMaterialized + offset ||
+                !ReferenceEquals(row.Entry, _layout[_firstMaterialized + offset]))
+                return false;
+        }
+
+        return true;
     }
 
     private ChatTimelineMessageRow GetOrCreateRow(int index)
