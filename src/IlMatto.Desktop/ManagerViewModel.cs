@@ -2446,6 +2446,10 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         {
             RefreshMessageTimeMetadata(value);
         }
+        // ChatEntries is a derived collection. The timeline view subscribes to
+        // this notification to replace its top/bottom logical spacers when a
+        // historical conversation becomes active.
+        ResetChatWindow(value);
         RestoreDraft(value);
         ResetDraftSaveTimer();
         NotifyCurrentProviderChanged();

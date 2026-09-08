@@ -78,6 +78,10 @@ internal sealed class ChatTimelineController : IDisposable
         _firstMaterialized = _lastMaterialized = -1;
         _items.Clear();
         SynchronizeLayout(preserveAnchor: false);
+        // A newly selected short historical session must never inherit the
+        // previous session's large pixel offset. The window schedules its
+        // normal ScrollToEnd afterwards, once this fresh extent exists.
+        SetVerticalOffsetSafely(0);
         RefreshVisibleItems();
     }
 
