@@ -501,16 +501,19 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
             // WPF's default text renderer often falls back to monochrome glyph
             // outlines for Segoe UI Emoji. Emoji.Wpf replaces supported emoji
             // runs with vector inlines built from the color glyph layers that
-            // Windows ships with the font. Keep the normal font runs above as a
-            // safe fallback if substitution is unavailable on a particular OS.
-            try
+            // Windows ships with the font. The replacement scans the whole
+            // document, so skip it for ordinary prose that has no real emoji.
+            if (EmojiTextSupport.ContainsEmoji(markdown))
             {
-                document.SubstituteGlyphs();
-            }
-            catch (Exception)
-            {
-                // Rendering the response must remain best-effort: the existing
-                // Segoe UI Emoji fallback is still preferable to losing text.
+                try
+                {
+                    document.SubstituteGlyphs();
+                }
+                catch (Exception)
+                {
+                    // Rendering the response must remain best-effort: the
+                    // Segoe UI Emoji fallback is still preferable to losing text.
+                }
             }
             return document;
         }
