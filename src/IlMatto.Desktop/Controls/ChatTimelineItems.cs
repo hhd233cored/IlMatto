@@ -83,6 +83,15 @@ public sealed class ReservedMessagePresenter : ContentControl
 
     private int _measurementVersion;
 
+    public ReservedMessagePresenter()
+    {
+        // The logical timeline owns a row's outer height. A newly encountered
+        // Markdown document may briefly be taller than its estimate, but must
+        // not paint into the following reserved row before the measured height
+        // has been committed to the layout index.
+        ClipToBounds = true;
+    }
+
     public ManagerChatEntry? Message
     {
         get => (ManagerChatEntry?)GetValue(MessageProperty);
@@ -109,13 +118,16 @@ public sealed class ReservedMessagePresenter : ContentControl
         if (!RenderContent || Message is null)
             return new WpfSize(ResolveWidth(constraint), reserved);
 
-        // The full message template is measured naturally. Returning the larger
-        // value prevents a first-time estimate from clipping live Markdown; the
-        // queued measurement immediately replaces that estimate in the index.
+        // Measure the full template only to learn its next cached height. The
+        // outer desired height must remain the layout index's reservation: WPF
+        // derives ScrollViewer.ExtentHeight from this value while the
+        // controller derives its logical offsets from the same value. Returning
+        // the natural height here would create two competing scroll coordinate
+        // systems and make the scrollbar thumb jump during a fast traversal.
         var desired = base.MeasureOverride(new WpfSize(ResolveWidth(constraint), double.PositiveInfinity));
         var naturalHeight = Math.Max(24, desired.Height);
         QueueMeasurement(naturalHeight, ResolveWidth(constraint));
-        return new WpfSize(desired.Width, Math.Max(reserved, naturalHeight));
+        return new WpfSize(ResolveWidth(constraint), reserved);
     }
 
     private static void OnPresentationPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
