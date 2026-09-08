@@ -57,10 +57,14 @@
       <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
       <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
       <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
-      <Setter Property="ScrollViewer.IsDeferredScrollingEnabled" Value="True"/>
+      <!-- Dragging the thumb moves the chat immediately; Markdown stays cached and
+           the virtualizing panel limits the amount of UI created at once. -->
+      <Setter Property="ScrollViewer.IsDeferredScrollingEnabled" Value="False"/>
       <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
       <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
-      <Setter Property="VirtualizingPanel.CacheLength" Value="0.5,0.5"/>
+      <!-- Keep one viewport ready on either side so normal drag scrolling does
+           not need to construct every newly visible chat bubble synchronously. -->
+      <Setter Property="VirtualizingPanel.CacheLength" Value="1,1"/>
       <Setter Property="VirtualizingPanel.CacheLengthUnit" Value="Page"/>
       <!-- Let the battle-tested WPF panel own its pixel offset and extent. -->
       <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
