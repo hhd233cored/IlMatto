@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -25,8 +26,15 @@ public partial class ManagerWindow : Window
     private bool _emojiPickerInitializing;
     private StackPanel? _recentEmojiSection;
     private ScrollViewer? _managerChatScrollViewer;
-    private ChatLayoutStabilityController? _chatLayoutStabilityController;
+    private ChatTimelineController? _chatTimelineController;
     private Thumb? _managerChatScrollThumb;
+
+    /// <summary>
+    /// The ListBox view window: fixed-height top/bottom spacers plus only the
+    /// messages near the current viewport. It is intentionally window-owned
+    /// because its layout state must never become persisted conversation data.
+    /// </summary>
+    public ObservableCollection<object> ChatTimelineItems { get; } = new();
 
     public ManagerWindow()
     {
@@ -40,7 +48,7 @@ public partial class ManagerWindow : Window
         SourceInitialized += (_, _) => FitWindowToWorkArea();
         _followTimer.Tick += (_, _) => { if (DataContext is ManagerViewModel { IsBusy: true } && _followTail) GetChatScrollViewer()?.ScrollToEnd(); else _followTimer.Stop(); };
         Loaded += async (_, _) => { await viewModel.InitializeAsync(); await Dispatcher.InvokeAsync(() => GetChatScrollViewer()?.ScrollToEnd(), DispatcherPriority.Background); };
-        Closed += (_, _) => DisposeChatLayoutStabilityController();
+        Closed += (_, _) => DisposeChatTimelineController();
     }
 
     private void OpenPiWorkbench()
@@ -112,7 +120,10 @@ public partial class ManagerWindow : Window
             else _followTimer.Stop();
         }
         if (e.PropertyName is nameof(ManagerViewModel.ChatEntries) or nameof(ManagerViewModel.SelectedConversation))
+        {
+            if (sender is ManagerViewModel viewModel) _chatTimelineController?.SetEntries(viewModel.ChatEntries);
             Dispatcher.BeginInvoke(() => GetChatScrollViewer()?.ScrollToEnd(), DispatcherPriority.Background);
+        }
     }
 
     private void UserMessageSent()
@@ -136,8 +147,9 @@ public partial class ManagerWindow : Window
         _managerChatScrollViewer = FindVisualChild<ScrollViewer>(ManagerChatList);
         if (_managerChatScrollViewer is null) return;
         _managerChatScrollViewer.ScrollChanged += ManagerChatScrollViewer_OnScrollChanged;
-        _chatLayoutStabilityController = new ChatLayoutStabilityController(ManagerChatList, _managerChatScrollViewer);
-        _chatLayoutStabilityController.Attach();
+        _chatTimelineController = new ChatTimelineController(ManagerChatList, _managerChatScrollViewer, ChatTimelineItems);
+        _chatTimelineController.Attach();
+        if (DataContext is ManagerViewModel viewModel) _chatTimelineController.SetEntries(viewModel.ChatEntries);
         _managerChatScrollThumb = FindVisualChild<Thumb>(_managerChatScrollViewer);
         if (_managerChatScrollThumb is not null)
         {
@@ -149,15 +161,22 @@ public partial class ManagerWindow : Window
     private void ManagerChatScrollThumb_OnDragStarted(object sender, DragStartedEventArgs e)
     {
         // Dragging history must not compete with the live response's tail
-        // follow. The stabilizer still renders full Markdown in real time.
+        // follow. Newly entered rows reserve cached space before Markdown is
+        // materialized, so the native thumb retains a stable extent.
         _followTail = false;
-        _chatLayoutStabilityController?.BeginThumbDrag();
+        _chatTimelineController?.BeginThumbDrag();
     }
 
     private void ManagerChatScrollThumb_OnDragCompleted(object sender, DragCompletedEventArgs e) =>
-        _chatLayoutStabilityController?.CompleteThumbDrag();
+        _chatTimelineController?.CompleteThumbDrag();
 
-    private void DisposeChatLayoutStabilityController()
+    private void TimelineMessagePresenter_OnNaturalHeightMeasured(object sender, ChatMessageMeasuredEventArgs e)
+    {
+        if (sender is ReservedMessagePresenter { DataContext: ChatTimelineMessageRow row })
+            _chatTimelineController?.RecordNaturalHeight(row, e);
+    }
+
+    private void DisposeChatTimelineController()
     {
         if (_managerChatScrollThumb is not null)
         {
@@ -165,8 +184,8 @@ public partial class ManagerWindow : Window
             _managerChatScrollThumb.DragCompleted -= ManagerChatScrollThumb_OnDragCompleted;
             _managerChatScrollThumb = null;
         }
-        _chatLayoutStabilityController?.Dispose();
-        _chatLayoutStabilityController = null;
+        _chatTimelineController?.Dispose();
+        _chatTimelineController = null;
     }
 
     private ScrollViewer? GetChatScrollViewer() => _managerChatScrollViewer ??= FindVisualChild<ScrollViewer>(ManagerChatList);
