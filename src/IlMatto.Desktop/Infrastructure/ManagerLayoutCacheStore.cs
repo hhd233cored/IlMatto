@@ -14,7 +14,9 @@ internal static class ManagerLayoutCacheStore
 {
     private const int MaxEntries = 10_000;
     private const int WidthBucketSize = 32;
+    private const double GeometryEpsilon = 0.5;
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
+    private static readonly object FileLock = new();
 
     private static string RootPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -36,10 +38,8 @@ internal static class ManagerLayoutCacheStore
             if (snapshot is null || !string.Equals(snapshot.SessionId, sessionId, StringComparison.Ordinal) || snapshot.WidthBucket != widthBucket)
                 return false;
 
-            entries = snapshot.Entries
-                .Where(item => item.MessageIndex >= 0 && item.RowHeight is >= 24 and <= 12000)
-                .GroupBy(item => item.MessageIndex)
-                .ToDictionary(group => group.Key, group => group.Last());
+            entries = CleanEntries(snapshot.Entries)
+                .ToDictionary(item => item.MessageIndex, item => item);
             return entries.Count > 0;
         }
         catch
@@ -50,17 +50,125 @@ internal static class ManagerLayoutCacheStore
         }
     }
 
-    public static void Save(string sessionId, int widthBucket, IEnumerable<ManagerMessageLayoutCacheEntry> entries)
+    public static bool Save(string sessionId, int widthBucket, IEnumerable<ManagerMessageLayoutCacheEntry> entries)
     {
-        if (string.IsNullOrWhiteSpace(sessionId) || widthBucket <= 0) return;
+        if (string.IsNullOrWhiteSpace(sessionId) || widthBucket <= 0) return false;
+        var cleanEntries = CleanEntries(entries);
+        if (cleanEntries.Count == 0) return false;
 
-        var cleanEntries = entries
-            .Where(item => item.MessageIndex >= 0 && item.RowHeight is >= 24 and <= 12000)
+        lock (FileLock)
+        {
+            if (TryReadSnapshot(sessionId, widthBucket, out var existing) &&
+                AreEquivalent(existing.Entries, cleanEntries))
+                return false;
+
+            WriteSnapshot(sessionId, widthBucket, cleanEntries);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Updates only the supplied message measurements while preserving other
+    /// messages already stored for the same session and width bucket. This is
+    /// used by the air-bubble timeline, which measures only a small visible
+    /// range at a time.
+    /// </summary>
+    public static bool MergeAndSave(string sessionId, int widthBucket, IEnumerable<ManagerMessageLayoutCacheEntry> updates)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId) || widthBucket <= 0) return false;
+
+        var cleanUpdates = CleanEntries(updates);
+        if (cleanUpdates.Count == 0) return false;
+
+        lock (FileLock)
+        {
+            var merged = new Dictionary<int, ManagerMessageLayoutCacheEntry>();
+            var hasMatchingSnapshot = TryReadSnapshot(sessionId, widthBucket, out var existing);
+            if (hasMatchingSnapshot)
+            {
+                foreach (var entry in CleanEntries(existing.Entries))
+                    merged[entry.MessageIndex] = entry;
+            }
+
+            foreach (var entry in cleanUpdates)
+                merged[entry.MessageIndex] = entry;
+
+            var cleanMerged = CleanEntries(merged.Values);
+            if (hasMatchingSnapshot && AreEquivalent(existing.Entries, cleanMerged))
+                return false;
+
+            WriteSnapshot(sessionId, widthBucket, cleanMerged);
+            return true;
+        }
+    }
+
+    private static List<ManagerMessageLayoutCacheEntry> CleanEntries(IEnumerable<ManagerMessageLayoutCacheEntry> entries) =>
+        (entries ?? Enumerable.Empty<ManagerMessageLayoutCacheEntry>())
+            .Where(item => item.MessageIndex >= 0 && double.IsFinite(item.RowHeight) && item.RowHeight is >= 24 and <= 12000)
+            .Select(item => new ManagerMessageLayoutCacheEntry
+            {
+                MessageIndex = item.MessageIndex,
+                RowHeight = Math.Clamp(item.RowHeight, 24, 12000),
+                BubbleHeight = NormalizeOptionalDimension(item.BubbleHeight),
+                BubbleWidth = NormalizeOptionalDimension(item.BubbleWidth),
+            })
             .GroupBy(item => item.MessageIndex)
             .Select(group => group.Last())
             .OrderBy(item => item.MessageIndex)
             .Take(MaxEntries)
             .ToList();
+
+    private static bool AreEquivalent(
+        IEnumerable<ManagerMessageLayoutCacheEntry> left,
+        IEnumerable<ManagerMessageLayoutCacheEntry> right)
+    {
+        var leftEntries = CleanEntries(left);
+        var rightEntries = CleanEntries(right);
+        if (leftEntries.Count != rightEntries.Count) return false;
+
+        for (var index = 0; index < leftEntries.Count; index++)
+        {
+            var oldEntry = leftEntries[index];
+            var newEntry = rightEntries[index];
+            if (oldEntry.MessageIndex != newEntry.MessageIndex ||
+                !NearlyEqual(oldEntry.RowHeight, newEntry.RowHeight) ||
+                !NearlyEqual(oldEntry.BubbleHeight, newEntry.BubbleHeight) ||
+                !NearlyEqual(oldEntry.BubbleWidth, newEntry.BubbleWidth))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool NearlyEqual(double left, double right) =>
+        double.IsFinite(left) && double.IsFinite(right) && Math.Abs(left - right) <= GeometryEpsilon;
+
+    private static double NormalizeOptionalDimension(double value) =>
+        double.IsFinite(value) && value >= 24 ? Math.Clamp(value, 24, 12000) : 0;
+
+    private static bool TryReadSnapshot(string sessionId, int widthBucket, out ManagerLayoutCacheSnapshot snapshot)
+    {
+        snapshot = new ManagerLayoutCacheSnapshot();
+        try
+        {
+            var path = GetPath(sessionId);
+            if (!File.Exists(path)) return false;
+            var loaded = JsonSerializer.Deserialize<ManagerLayoutCacheSnapshot>(File.ReadAllText(path), Options);
+            if (loaded is null || !string.Equals(loaded.SessionId, sessionId, StringComparison.Ordinal) ||
+                loaded.WidthBucket != widthBucket)
+                return false;
+            snapshot = loaded;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void WriteSnapshot(string sessionId, int widthBucket, IEnumerable<ManagerMessageLayoutCacheEntry> entries)
+    {
+        var cleanEntries = CleanEntries(entries);
         if (cleanEntries.Count == 0) return;
 
         var snapshot = new ManagerLayoutCacheSnapshot

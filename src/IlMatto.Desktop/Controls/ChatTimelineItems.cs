@@ -37,6 +37,16 @@ internal sealed partial class ChatTimelineMessageRow : ObservableObject
     [ObservableProperty] private double reservedBubbleHeight;
     [ObservableProperty] private double reservedBubbleWidth;
     [ObservableProperty] private bool renderContent;
+
+    /// <summary>
+    /// Placeholder rows must occupy exactly the cached logical height. Live
+    /// rows return NaN so WPF uses the natural height of the newly rendered
+    /// message instead of keeping the old shell height as a hard clip.
+    /// </summary>
+    public double LayoutHeight => RenderContent ? double.NaN : ReservedHeight;
+
+    partial void OnReservedHeightChanged(double value) => OnPropertyChanged(nameof(LayoutHeight));
+    partial void OnRenderContentChanged(bool value) => OnPropertyChanged(nameof(LayoutHeight));
 }
 
 /// <summary>Chooses between a fixed-height logical spacer and a chat message row.</summary>
@@ -107,11 +117,10 @@ public sealed class ReservedMessagePresenter : ContentControl
 
     public ReservedMessagePresenter()
     {
-        // The logical timeline owns a row's outer height. A newly encountered
-        // Markdown document may briefly be taller than its estimate, but must
-        // not paint into the following reserved row before the measured height
-        // has been committed to the layout index.
-        ClipToBounds = true;
+        // Placeholder rows are measured from ReservedHeight below. Once a row
+        // is live, its natural content must be allowed to report a larger
+        // height instead of being clipped by the previous reservation.
+        ClipToBounds = false;
     }
 
     public ManagerChatEntry? Message
@@ -160,20 +169,29 @@ public sealed class ReservedMessagePresenter : ContentControl
 
     protected override WpfSize MeasureOverride(WpfSize constraint)
     {
-        var reserved = NormalizeHeight(ReservedHeight);
         if (!RenderContent || Message is null)
-            return new WpfSize(ResolveWidth(constraint), reserved);
+        {
+            // Do not measure the placeholder template's visual tree. Its
+            // dimensions are already known by the timeline cache.
+            return new WpfSize(
+                NormalizeWidth(ReservedBubbleWidth),
+                NormalizeHeight(ReservedHeight));
+        }
 
-        // Measure the full template only to learn its next cached height. The
-        // outer desired height must remain the layout index's reservation: WPF
-        // derives ScrollViewer.ExtentHeight from this value while the
-        // controller derives its logical offsets from the same value. Returning
-        // the natural height here would create two competing scroll coordinate
-        // systems and make the scrollbar thumb jump during a fast traversal.
-        var desired = base.MeasureOverride(new WpfSize(ResolveWidth(constraint), double.PositiveInfinity));
+        // Live rows intentionally use natural layout. The parent timeline
+        // keeps a MinHeight reservation, so a stale cache cannot clip a new
+        // message; the measured result is then fed back to the logical index.
+        var availableWidth = ResolveNaturalWidth(constraint);
+        var desired = base.MeasureOverride(new WpfSize(availableWidth, double.PositiveInfinity));
+        var naturalWidth = NormalizeWidth(desired.Width);
         var naturalHeight = Math.Max(24, desired.Height);
-        QueueMeasurement(naturalHeight, ResolveWidth(constraint));
-        return new WpfSize(ResolveWidth(constraint), reserved);
+        // The height cache is keyed by the width used for wrapping, not by
+        // the natural width of a short bubble. A short message may naturally
+        // be only 120px wide while it was correctly measured inside a 680px
+        // layout slot.
+        var layoutWidth = double.IsFinite(availableWidth) ? availableWidth : naturalWidth;
+        QueueMeasurement(naturalHeight, layoutWidth);
+        return new WpfSize(naturalWidth, naturalHeight);
     }
 
     private static void OnPresentationPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -198,8 +216,18 @@ public sealed class ReservedMessagePresenter : ContentControl
         }, DispatcherPriority.Render);
     }
 
-    private static double ResolveWidth(WpfSize constraint) =>
-        double.IsFinite(constraint.Width) && constraint.Width > 0 ? constraint.Width : 1;
+    private double ResolveNaturalWidth(WpfSize constraint)
+    {
+        var width = double.IsFinite(constraint.Width) && constraint.Width > 0
+            ? constraint.Width
+            : double.PositiveInfinity;
+        if (double.IsFinite(MaxWidth) && MaxWidth > 0)
+            width = Math.Min(width, MaxWidth);
+        return width;
+    }
+
+    private static double NormalizeWidth(double value) =>
+        double.IsFinite(value) && value > 0 ? value : 1;
 
     private static double NormalizeHeight(double value) =>
         double.IsFinite(value) ? Math.Clamp(value, 24, 12000) : 48;

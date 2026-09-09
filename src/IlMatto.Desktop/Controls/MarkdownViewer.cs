@@ -7,6 +7,8 @@ using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Emoji.Wpf;
+using MediaBrush = System.Windows.Media.Brush;
+using WpfTextBlock = System.Windows.Controls.TextBlock;
 using MediaColor = System.Windows.Media.Color;
 using MediaFontFamily = System.Windows.Media.FontFamily;
 using WpfSize = System.Windows.Size;
@@ -36,7 +38,7 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
         new FrameworkPropertyMetadata(true, OnDeferMarkdownRenderChanged));
 
     private static readonly Regex InlineToken = new(
-        @"(?<math>\$\$.*?\$\$|\$[^$\r\n]+\$|\\\([^\r\n]*?\\\)|\\\[[^\r\n]*?\\\])|(?<code>`[^`\r\n]+`)|(?<strike>~~[^~\r\n]+~~)|(?<strong>\*\*[^*\r\n]+\*\*|__[^_\r\n]+__)|(?<em>\*[^*\r\n]+\*|_[^_\r\n]+_)|(?<link>\[[^\]]+\]\([^\)]+\))",
+        @"(?<!\\)(?<strong>\*\*(?:\\.|[^*\\\r\n])+\*\*|__(?:\\.|[^_\\\r\n])+__)|(?<math>\$\$.*?\$\$|\$[^$\r\n]+\$|\\\([^\r\n]*?\\\)|\\\[[^\r\n]*?\\\])|(?<code>`[^`\r\n]+`)|(?<strike>~~(?:\\.|[^~\\\r\n])+~~)|(?<em>\*(?:\\.|[^*\\\r\n])+\*|_(?:\\.|[^_\\\r\n])+_)|(?<link>\[[^\]]+\]\([^\)]+\))",
         RegexOptions.Compiled);
     private string _requestedMarkdown = string.Empty;
     private string? _renderedMarkdown;
@@ -428,7 +430,8 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
 
         private abstract record MarkdownBlock;
         private sealed record ParagraphLinesBlock(string[] Lines) : MarkdownBlock;
-        private sealed record CodeBlockModel(string Text) : MarkdownBlock;
+        private sealed record CodeBlockModel(string Language, string Text) : MarkdownBlock;
+        private sealed record HorizontalRuleBlock : MarkdownBlock;
         private sealed record TableBlockModel(string[] Rows) : MarkdownBlock;
         private sealed record HeadingBlock(string Text, int Level) : MarkdownBlock;
         private sealed record BulletBlock(string Text) : MarkdownBlock;
@@ -467,7 +470,10 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
                         document.Blocks.Add(ParagraphLines(paragraphLines.Lines, 0, 14, false));
                         break;
                     case CodeBlockModel code:
-                        document.Blocks.Add(CodeBlock(code.Text));
+                        document.Blocks.Add(CodeBlock(code.Language, code.Text));
+                        break;
+                    case HorizontalRuleBlock:
+                        document.Blocks.Add(HorizontalRule());
                         break;
                     case TableBlockModel table:
                         document.Blocks.Add(TableBlock(table.Rows));
@@ -487,7 +493,7 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
                         break;
                     case QuoteBlock quote:
                     {
-                        var paragraph = Paragraph(quote.Text, 12, 14, false, "│ ");
+                        var paragraph = Paragraph(quote.Text, 12, 14, false);
                         paragraph.Foreground = new SolidColorBrush(MediaColor.FromRgb(83, 97, 116));
                         paragraph.BorderBrush = new SolidColorBrush(MediaColor.FromRgb(147, 197, 253));
                         paragraph.BorderThickness = new Thickness(2, 0, 0, 0);
@@ -585,6 +591,7 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
         {
             var lines = markdown.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
             var inCode = false;
+            var codeLanguage = string.Empty;
             var codeLines = new List<string>();
             var paragraphLines = new List<string>();
             var blocks = new List<MarkdownBlock>();
@@ -603,8 +610,14 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
                     FlushParagraph();
                     if (inCode)
                     {
-                        blocks.Add(new CodeBlockModel(string.Join("\n", codeLines)));
+                        blocks.Add(new CodeBlockModel(codeLanguage, string.Join("\n", codeLines)));
                         codeLines.Clear();
+                        codeLanguage = string.Empty;
+                    }
+                    else
+                    {
+                        var fenceInfo = line.TrimStart()[3..].Trim();
+                        codeLanguage = NormalizeCodeLanguage(fenceInfo);
                     }
                     inCode = !inCode;
                     continue;
@@ -613,6 +626,13 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
                 if (string.IsNullOrWhiteSpace(line))
                 {
                     FlushParagraph();
+                    continue;
+                }
+
+                if (IsHorizontalRule(line))
+                {
+                    FlushParagraph();
+                    blocks.Add(new HorizontalRuleBlock());
                     continue;
                 }
 
@@ -663,11 +683,20 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
                 paragraphLines.Add(line);
             }
             FlushParagraph();
-            if (inCode && codeLines.Count > 0) blocks.Add(new CodeBlockModel(string.Join("\n", codeLines)));
+            if (inCode && codeLines.Count > 0) blocks.Add(new CodeBlockModel(codeLanguage, string.Join("\n", codeLines)));
             return new MarkdownRenderPlan(blocks);
         }
 
         private static bool IsTableRow(string line) => line.Contains('|') && SplitTableRow(line).Count >= 2;
+
+        private static bool IsHorizontalRule(string line)
+        {
+            var value = line.Trim();
+            if (value.Length < 3) return false;
+            var marker = value[0];
+            if (marker is not ('-' or '*' or '_')) return false;
+            return value.All(character => character == marker || char.IsWhiteSpace(character));
+        }
 
         private static bool IsTableSeparator(string line)
         {
@@ -747,6 +776,18 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
             return TextAlignment.Left;
         }
 
+        private static BlockUIContainer HorizontalRule()
+        {
+            var rule = new Border
+            {
+                Height = 1,
+                Margin = new Thickness(0, 8, 0, 10),
+                Background = FreezeBrush(MediaColor.FromRgb(203, 213, 225)),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch
+            };
+            return new BlockUIContainer(rule);
+        }
+
         private static Paragraph BulletParagraph(string text, double left)
         {
             var task = Regex.Match(text, @"^\[([ xX])\]\s+(.*)$");
@@ -757,11 +798,341 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
             return paragraph;
         }
 
-        private static Paragraph CodeBlock(string text)
+        // Approximate the Visual Studio light-theme palette while keeping the
+        // renderer dependency-free. These are classification colors, not a
+        // full language-service implementation.
+        private static readonly MediaBrush CodeTextBrush = FreezeBrush(MediaColor.FromRgb(30, 30, 30));
+        private static readonly MediaBrush MathBrush = FreezeBrush(MediaColor.FromRgb(126, 70, 170));
+        private static readonly MediaBrush CodeKeywordBrush = FreezeBrush(MediaColor.FromRgb(0, 0, 255));
+        private static readonly MediaBrush CodeTypeBrush = FreezeBrush(MediaColor.FromRgb(38, 127, 153));
+        private static readonly MediaBrush CodeStringBrush = FreezeBrush(MediaColor.FromRgb(163, 21, 21));
+        private static readonly MediaBrush CodeNumberBrush = FreezeBrush(MediaColor.FromRgb(9, 134, 88));
+        private static readonly MediaBrush CodeCommentBrush = FreezeBrush(MediaColor.FromRgb(0, 128, 0));
+        private const double CodeFontSize = 10;
+        private const double CodeLineHeight = 15;
+
+        private static readonly HashSet<string> CodeKeywords = new(StringComparer.OrdinalIgnoreCase)
         {
-            var paragraph = new Paragraph { Margin = new Thickness(0, 5, 0, 7), Padding = new Thickness(10, 7, 10, 7), TextAlignment = TextAlignment.Left, Background = new SolidColorBrush(MediaColor.FromRgb(245, 247, 250)) };
-            paragraph.Inlines.Add(new Run(text) { FontFamily = new MediaFontFamily("Cascadia Mono"), FontSize = 13 });
-            return paragraph;
+            "abstract", "as", "async", "await", "base", "bool", "break", "case", "catch", "char", "class",
+            "const", "continue", "def", "default", "del", "do", "else", "elif", "enum", "event", "except",
+            "false", "finally", "float", "for", "foreach", "from", "function", "if", "in", "import", "interface",
+            "internal", "is", "lambda", "let", "namespace", "new", "null", "None", "not", "of", "or", "out",
+            "override", "pass", "private", "protected", "public", "raise", "readonly", "return", "select", "static",
+            "string", "struct", "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while",
+            "with", "yield"
+        };
+
+        // C#, C++ and Java share enough declaration/control-flow syntax for a
+        // small additional set to provide useful highlighting without pulling
+        // a compiler or grammar package into the desktop client.
+        private static readonly HashSet<string> CLikeKeywords = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "alignas", "alignof", "and", "asm", "assert", "atomic_cancel", "atomic_commit", "atomic_noexcept",
+            "bitand", "bitor", "compl", "concept", "consteval", "constexpr", "constinit", "const_cast", "co_await",
+            "co_return", "co_yield", "delete", "dynamic_cast", "extends", "final", "friend", "implements", "instanceof",
+            "module", "native", "noexcept", "nullptr", "package", "requires", "synchronized", "template",
+            "this", "throws", "transient", "typename", "using", "virtual", "super", "strictfp", "static_cast",
+            "reinterpret_cast", "dynamic_cast", "operator", "sizeof", "decltype", "thread_local", "union", "export",
+            "sealed", "record", "delegate", "extern", "explicit", "implicit", "fixed", "unsafe", "checked", "unchecked",
+            "lock", "nameof", "global", "get", "set", "init", "value", "required", "scoped", "when", "where"
+        };
+
+        private static readonly HashSet<string> CLikeTypeKeywords = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "auto", "bool", "boolean", "byte", "char", "decimal", "double", "float", "int", "long", "nint", "nuint",
+            "object", "sbyte", "short", "size_t", "string", "uint", "ulong", "ushort", "var", "void"
+        };
+
+        private static readonly HashSet<string> TypeScriptKeywords = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "abstract", "as", "asserts", "declare", "implements", "infer", "interface", "keyof", "namespace", "never",
+            "readonly", "satisfies", "type", "unknown"
+        };
+
+        private static readonly HashSet<string> CLikeTypeNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "ArrayList", "Console", "Dictionary", "Exception", "IOException", "List", "Map", "Math", "Object", "String",
+            "StringBuilder", "System", "Task", "Thread", "Vector", "Collections", "unordered_map", "vector", "size_t",
+            "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "FILE"
+        };
+
+        private static BlockUIContainer CodeBlock(string language, string text)
+        {
+            var card = new Border
+            {
+                Margin = new Thickness(0, 5, 0, 7),
+                BorderBrush = FreezeBrush(MediaColor.FromRgb(213, 221, 229)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Background = FreezeBrush(MediaColor.FromRgb(247, 249, 251)),
+                ClipToBounds = true,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch
+            };
+
+            var layout = new Grid();
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var header = new WpfTextBlock
+            {
+                Text = DisplayCodeLanguage(language),
+                FontFamily = new MediaFontFamily("Segoe UI"),
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = FreezeBrush(MediaColor.FromRgb(91, 103, 117)),
+                Margin = new Thickness(12, 7, 12, 7)
+            };
+            Grid.SetRow(header, 0);
+            layout.Children.Add(header);
+
+            var separator = new Border
+            {
+                Height = 1,
+                Background = FreezeBrush(MediaColor.FromRgb(220, 227, 234)),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch
+            };
+            Grid.SetRow(separator, 1);
+            layout.Children.Add(separator);
+
+            var codeLines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+            if (codeLines.Length == 0) codeLines = new[] { string.Empty };
+            var codeGrid = new Grid { HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch };
+            codeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            codeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            for (var index = 0; index < codeLines.Length; index++)
+            {
+                codeGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                var number = new WpfTextBlock
+                {
+                    Text = (index + 1).ToString(CultureInfo.InvariantCulture),
+                    TextAlignment = TextAlignment.Right,
+                    Foreground = FreezeBrush(MediaColor.FromRgb(138, 150, 165)),
+                    FontFamily = new MediaFontFamily("Cascadia Mono"),
+                    FontSize = CodeFontSize,
+                    LineHeight = CodeLineHeight,
+                    LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+                    Margin = new Thickness(12, 0, 10, 0),
+                    VerticalAlignment = VerticalAlignment.Top
+                };
+                Grid.SetRow(number, index);
+                Grid.SetColumn(number, 0);
+                codeGrid.Children.Add(number);
+
+                var line = new WpfTextBlock
+                {
+                    FontFamily = new MediaFontFamily("Cascadia Mono"),
+                    FontSize = CodeFontSize,
+                    LineHeight = CodeLineHeight,
+                    LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = CodeTextBrush,
+                    Margin = new Thickness(4, 0, 16, 0),
+                    VerticalAlignment = VerticalAlignment.Top
+                };
+                AddSyntaxHighlightedCodeLine(line.Inlines, codeLines[index], language);
+                Grid.SetRow(line, index);
+                Grid.SetColumn(line, 1);
+                codeGrid.Children.Add(line);
+            }
+
+            var codeHost = new Border
+            {
+                Child = codeGrid,
+                Padding = new Thickness(0, 9, 0, 10),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch
+            };
+            Grid.SetRow(codeHost, 2);
+            layout.Children.Add(codeHost);
+
+            card.Child = layout;
+            return new BlockUIContainer(card);
+        }
+
+        private static string NormalizeCodeLanguage(string fenceInfo)
+        {
+            if (string.IsNullOrWhiteSpace(fenceInfo)) return string.Empty;
+            var language = fenceInfo.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+            language = language.Trim().Trim('`').ToLowerInvariant();
+            return language switch
+            {
+                "py" => "python",
+                "js" => "javascript",
+                "ts" => "typescript",
+                "cs" => "csharp",
+                "c#" => "csharp",
+                "sh" or "shell" or "zsh" => "bash",
+                "yml" => "yaml",
+                _ => language
+            };
+        }
+
+        private static string DisplayCodeLanguage(string language) => language switch
+        {
+            "" => "Code",
+            "csharp" => "C#",
+            "cpp" => "C++",
+            "css" => "CSS",
+            "html" => "HTML",
+            "javascript" => "JavaScript",
+            "json" => "JSON",
+            "python" => "Python",
+            "typescript" => "TypeScript",
+            "yaml" => "YAML",
+            "bash" => "Bash",
+            _ => language.Length == 1 ? language.ToUpperInvariant() : char.ToUpperInvariant(language[0]) + language[1..]
+        };
+
+        private static void AddSyntaxHighlightedCodeLine(InlineCollection inlines, string text, string language)
+        {
+            if (text.Length == 0)
+            {
+                inlines.Add(new Run(" ") { Foreground = CodeTextBrush });
+                return;
+            }
+
+            var position = 0;
+            while (position < text.Length)
+            {
+                if (IsCommentStart(text, position, language))
+                {
+                    AddCodeRun(inlines, text[position..], CodeCommentBrush);
+                    return;
+                }
+
+                var character = text[position];
+                if (character is '"' or '\'' or '`')
+                {
+                    var quote = character;
+                    var end = position + 1;
+                    while (end < text.Length)
+                    {
+                        if (text[end] == '\\')
+                        {
+                            end += Math.Min(2, text.Length - end);
+                            continue;
+                        }
+                        if (text[end] == quote)
+                        {
+                            end++;
+                            break;
+                        }
+                        end++;
+                    }
+                    AddCodeRun(inlines, text[position..end], CodeStringBrush);
+                    position = end;
+                    continue;
+                }
+
+                if (char.IsDigit(character) && (position == 0 || !IsIdentifierCharacter(text[position - 1])))
+                {
+                    var end = position + 1;
+                    while (end < text.Length && (char.IsLetterOrDigit(text[end]) || text[end] is '.' or '_' or '+' or '-')) end++;
+                    AddCodeRun(inlines, text[position..end], CodeNumberBrush);
+                    position = end;
+                    continue;
+                }
+
+                if (IsIdentifierCharacter(character))
+                {
+                    var end = position + 1;
+                    while (end < text.Length && IsIdentifierCharacter(text[end])) end++;
+                    var identifier = text[position..end];
+                    var brush = IsCodeKeyword(identifier, language)
+                        ? CodeKeywordBrush
+                        : IsLikelyTypeName(identifier, language, text, position, end) ? CodeTypeBrush : CodeTextBrush;
+                    AddCodeRun(inlines, identifier, brush);
+                    position = end;
+                    continue;
+                }
+
+                var plainEnd = position + 1;
+                while (plainEnd < text.Length
+                    && !IsIdentifierCharacter(text[plainEnd])
+                    && text[plainEnd] is not ('"' or '\'' or '`')
+                    && !IsCommentStart(text, plainEnd, language)
+                    && !(char.IsDigit(text[plainEnd]) && (plainEnd == 0 || !IsIdentifierCharacter(text[plainEnd - 1]))))
+                    plainEnd++;
+                AddCodeRun(inlines, text[position..plainEnd], CodeTextBrush);
+                position = plainEnd;
+            }
+        }
+
+        private static bool IsCommentStart(string text, int position, string language)
+        {
+            if (position + 1 < text.Length && text[position] == '/' && (text[position + 1] is '/' or '*')) return true;
+            return text[position] == '#' && (language is "python" or "bash" or "ruby" or "yaml" or "shell");
+        }
+
+        private static bool IsCodeKeyword(string identifier, string language)
+        {
+            if (CodeKeywords.Contains(identifier)) return true;
+            if (language is "typescript" && TypeScriptKeywords.Contains(identifier)) return true;
+            return IsCLikeLanguage(language) && (CLikeKeywords.Contains(identifier) || CLikeTypeKeywords.Contains(identifier));
+        }
+
+        private static bool IsLikelyTypeName(string identifier, string language, string line, int start, int end)
+        {
+            if (!IsCLikeLanguage(language)) return false;
+            if (CLikeTypeNames.Contains(identifier)) return true;
+
+            // Do not classify every PascalCase identifier as a type: that would
+            // incorrectly color properties, variables, and method names. Only
+            // use a type color in a few cheap, high-confidence declaration/use
+            // contexts.
+            var previous = PreviousIdentifier(line, start);
+            if (previous is "class" or "struct" or "interface" or "enum" or "record" or "new" or "typeof" or "default" or "as" or "is")
+                return true;
+
+            var next = NextIdentifier(line, end);
+            if (next is not null
+                && (previous is "public" or "private" or "protected" or "internal" or "static" or "readonly" or "const" or "ref" or "out"))
+                return true;
+
+            return start > 0 && (line[start - 1] is '<' or ',');
+        }
+
+        private static bool IsCLikeLanguage(string language) => language is "csharp" or "cpp" or "c" or "java";
+
+        private static string? PreviousIdentifier(string line, int start)
+        {
+            var end = start - 1;
+            while (end >= 0 && char.IsWhiteSpace(line[end])) end--;
+            if (end < 0 || !IsIdentifierCharacter(line[end])) return null;
+            var begin = end;
+            while (begin > 0 && IsIdentifierCharacter(line[begin - 1])) begin--;
+            return line[begin..(end + 1)];
+        }
+
+        private static string? NextIdentifier(string line, int start)
+        {
+            var index = start;
+            while (index < line.Length && char.IsWhiteSpace(line[index])) index++;
+            if (index >= line.Length || !IsIdentifierCharacter(line[index])) return null;
+            var end = index + 1;
+            while (end < line.Length && IsIdentifierCharacter(line[end])) end++;
+            return line[index..end];
+        }
+
+        private static bool IsIdentifierCharacter(char character) => char.IsLetterOrDigit(character) || character == '_';
+
+        private static void AddCodeRun(InlineCollection inlines, string text, MediaBrush foreground)
+        {
+            if (text.Length == 0) return;
+            inlines.Add(new Run(text)
+            {
+                FontFamily = new MediaFontFamily("Cascadia Mono"),
+                FontSize = CodeFontSize,
+                Foreground = foreground
+            });
+        }
+
+        private static MediaBrush FreezeBrush(MediaColor color)
+        {
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            return brush;
         }
 
         private static Paragraph Paragraph(string text, double left, double size, bool bold, string prefix = "")
@@ -793,7 +1164,7 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
                         AddTextWithEmoji(inlines, part.Text, run => run.FontWeight = paragraphBold ? FontWeights.Bold : FontWeights.Normal);
                         break;
                     case InlineKind.Math:
-                        inlines.Add(new Run(part.Text) { FontFamily = new MediaFontFamily("Cambria Math"), FontStyle = FontStyles.Italic, Foreground = new SolidColorBrush(MediaColor.FromRgb(126, 70, 170)), FontWeight = paragraphBold ? FontWeights.Bold : FontWeights.Normal });
+                        AddMathInline(inlines, part.Text, paragraphBold);
                         break;
                     case InlineKind.Code:
                         inlines.Add(new Run(part.Text) { FontFamily = new MediaFontFamily("Cascadia Mono"), Background = new SolidColorBrush(MediaColor.FromRgb(241, 245, 249)), Foreground = new SolidColorBrush(MediaColor.FromRgb(30, 64, 175)) });
@@ -802,10 +1173,13 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
                         AddTextWithEmoji(inlines, part.Text, run => run.TextDecorations = System.Windows.TextDecorations.Strikethrough);
                         break;
                     case InlineKind.Strong:
-                        AddTextWithEmoji(inlines, part.Text, run => run.FontWeight = FontWeights.Bold);
+                        // Parse nested inline syntax again so formulas such as
+                        // **$N_A \cdot N_B = 1$** keep both math layout and
+                        // the surrounding bold style.
+                        AddInline(inlines, part.Text, true);
                         break;
                     case InlineKind.Emphasis:
-                        AddTextWithEmoji(inlines, part.Text, run => run.FontStyle = FontStyles.Italic);
+                        AddTextWithEmoji(inlines, UnescapeMarkdownEscapes(part.Text), run => run.FontStyle = FontStyles.Italic);
                         break;
                     case InlineKind.Link:
                     {
@@ -869,7 +1243,7 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
             var position = 0;
             void AddText(string value)
             {
-                if (!string.IsNullOrEmpty(value)) parts.Add(new InlinePart(InlineKind.Text, NormalizeProseWhitespace(value)));
+                if (!string.IsNullOrEmpty(value)) parts.Add(new InlinePart(InlineKind.Text, NormalizeProseWhitespace(UnescapeMarkdownEscapes(value))));
             }
 
             foreach (Match match in InlineToken.Matches(text))
@@ -898,6 +1272,101 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
 
         private static string NormalizeProseWhitespace(string value) => Regex.Replace(value, @"[ \t]{2,}", " ");
 
+        private static string UnescapeMarkdownEscapes(string value)
+        {
+            if (value.IndexOf('\\') < 0) return value;
+            var builder = new StringBuilder(value.Length);
+            for (var position = 0; position < value.Length; position++)
+            {
+                if (value[position] == '\\' && position + 1 < value.Length && "\\`*_[]~()".Contains(value[position + 1]))
+                {
+                    builder.Append(value[++position]);
+                    continue;
+                }
+                builder.Append(value[position]);
+            }
+            return builder.ToString();
+        }
+
+        private static void AddMathInline(InlineCollection inlines, string formula, bool paragraphBold)
+        {
+            var normal = new StringBuilder();
+            void FlushNormal()
+            {
+                if (normal.Length == 0) return;
+                inlines.Add(new Run(normal.ToString())
+                {
+                    FontFamily = new MediaFontFamily("Cambria Math"),
+                    FontStyle = FontStyles.Italic,
+                    Foreground = MathBrush,
+                    FontWeight = paragraphBold ? FontWeights.Bold : FontWeights.Normal
+                });
+                normal.Clear();
+            }
+
+            for (var position = 0; position < formula.Length; position++)
+            {
+                var marker = formula[position];
+                if (marker is not ('_' or '^'))
+                {
+                    // Braces used only for a simple math group are layout
+                    // markers and should not appear in the rendered formula.
+                    if (marker is not ('{' or '}')) normal.Append(marker);
+                    continue;
+                }
+
+                var operandStart = position + 1;
+                if (operandStart >= formula.Length)
+                {
+                    normal.Append(marker);
+                    continue;
+                }
+
+                string operand;
+                if (formula[operandStart] == '{')
+                {
+                    var groupEnd = FindMathGroupEnd(formula, operandStart);
+                    if (groupEnd < 0)
+                    {
+                        normal.Append(marker);
+                        continue;
+                    }
+
+                    operand = formula[(operandStart + 1)..groupEnd].Replace("{", "", StringComparison.Ordinal).Replace("}", "", StringComparison.Ordinal);
+                    position = groupEnd;
+                }
+                else
+                {
+                    operand = formula[operandStart].ToString();
+                    position = operandStart;
+                }
+
+                FlushNormal();
+                inlines.Add(new Run(operand)
+                {
+                    FontFamily = new MediaFontFamily("Cambria Math"),
+                    FontStyle = FontStyles.Italic,
+                    Foreground = MathBrush,
+                    FontSize = 10.5,
+                    BaselineAlignment = marker == '^' ? BaselineAlignment.Superscript : BaselineAlignment.Subscript,
+                    FontWeight = paragraphBold ? FontWeights.Bold : FontWeights.Normal
+                });
+            }
+
+            FlushNormal();
+        }
+
+        private static int FindMathGroupEnd(string formula, int openingBrace)
+        {
+            var depth = 0;
+            for (var position = openingBrace; position < formula.Length; position++)
+            {
+                if (formula[position] == '{') depth++;
+                else if (formula[position] == '}' && --depth == 0) return position;
+            }
+            return -1;
+        }
+
         private static string FormatLatex(string value)
         {
             var formula = value.Trim();
@@ -912,11 +1381,16 @@ public sealed class MarkdownViewer : FlowDocumentScrollViewer
             var replacements = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["\\alpha"] = "α", ["\\beta"] = "β", ["\\gamma"] = "γ", ["\\delta"] = "δ", ["\\epsilon"] = "ε", ["\\theta"] = "θ", ["\\lambda"] = "λ", ["\\mu"] = "μ", ["\\pi"] = "π", ["\\sigma"] = "σ", ["\\phi"] = "φ", ["\\omega"] = "ω",
-                ["\\times"] = "×", ["\\cdot"] = "·", ["\\leq"] = "≤", ["\\geq"] = "≥", ["\\neq"] = "≠", ["\\pm"] = "±", ["\\infty"] = "∞", ["\\sum"] = "∑", ["\\int"] = "∫", ["\\rightarrow"] = "→", ["\\to"] = "→",
+                ["\\Gamma"] = "Γ", ["\\Delta"] = "Δ", ["\\Theta"] = "Θ", ["\\Lambda"] = "Λ", ["\\Xi"] = "Ξ", ["\\Pi"] = "Π", ["\\Sigma"] = "Σ", ["\\Phi"] = "Φ", ["\\Psi"] = "Ψ", ["\\Omega"] = "Ω",
+                ["\\notin"] = "∉", ["\\subseteq"] = "⊆", ["\\supseteq"] = "⊇", ["\\leq"] = "≤", ["\\geq"] = "≥", ["\\neq"] = "≠", ["\\approx"] = "≈", ["\\equiv"] = "≡", ["\\cong"] = "≅", ["\\simeq"] = "≃", ["\\asymp"] = "≍", ["\\propto"] = "∝", ["\\sim"] = "∼", ["\\ll"] = "≪", ["\\gg"] = "≫",
+                ["\\in"] = "∈", ["\\subset"] = "⊂", ["\\supset"] = "⊃", ["\\cup"] = "∪", ["\\cap"] = "∩", ["\\emptyset"] = "∅", ["\\forall"] = "∀", ["\\exists"] = "∃", ["\\partial"] = "∂", ["\\nabla"] = "∇", ["\\land"] = "∧", ["\\lor"] = "∨", ["\\neg"] = "¬",
+                ["\\Leftrightarrow"] = "⇔", ["\\Rightarrow"] = "⇒", ["\\Leftarrow"] = "⇐", ["\\iff"] = "⇔", ["\\implies"] = "⇒", ["\\mapsto"] = "↦",
+                ["\\times"] = "×", ["\\cdot"] = "·", ["\\pm"] = "±", ["\\mp"] = "∓", ["\\infty"] = "∞", ["\\sum"] = "∑", ["\\prod"] = "∏", ["\\int"] = "∫", ["\\oint"] = "∮", ["\\sqrt"] = "√", ["\\rightarrow"] = "→", ["\\leftarrow"] = "←", ["\\leftrightarrow"] = "↔", ["\\to"] = "→",
+                ["\\cdots"] = "⋯", ["\\ldots"] = "…", ["\\dots"] = "…", ["\\ell"] = "ℓ", ["\\Re"] = "ℜ", ["\\Im"] = "ℑ",
                 ["\\left"] = "", ["\\right"] = "", ["\\, "] = " ", ["\\,"] = " ", ["\\; "] = " ", ["\\;"] = " "
             };
             foreach (var replacement in replacements) formula = formula.Replace(replacement.Key, replacement.Value, StringComparison.Ordinal);
-            return formula.Replace("{", "", StringComparison.Ordinal).Replace("}", "", StringComparison.Ordinal).Trim();
+            return formula.Trim();
         }
     }
 }

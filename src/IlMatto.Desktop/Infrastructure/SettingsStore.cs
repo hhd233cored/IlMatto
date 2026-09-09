@@ -42,6 +42,8 @@ public sealed class AppSettings
     public string AgentAvatarPath { get; set; } = "";
     /// <summary>Use the legacy fully rendered chat list for diagnostics.</summary>
     public bool UseFullChatRendering { get; set; }
+    /// <summary>The Manager conversation that was selected when the app was last closed.</summary>
+    public string LastManagerSessionId { get; set; } = "";
     public ManagerCompanionProfile DefaultCompanionProfile { get; set; } = new();
 
     internal static string FindCodexCli()

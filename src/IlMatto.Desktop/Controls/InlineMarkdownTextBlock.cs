@@ -35,6 +35,10 @@ public sealed class InlineMarkdownTextBlock : TextBlock
 
     private void Render(string markdown)
     {
+        // Agent responses commonly carry one transport newline at the end.
+        // Treat terminal newlines as Markdown's trailing whitespace rather
+        // than creating a visible empty line. Internal newlines remain intact.
+        markdown = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').TrimEnd('\n');
         Inlines.Clear();
         foreach (var part in InlineMarkdownParser.GetOrCreatePlan(markdown))
         {

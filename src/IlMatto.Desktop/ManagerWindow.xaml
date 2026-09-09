@@ -11,7 +11,7 @@
       <Border Height="{Binding Height}" Background="Transparent"/>
     </DataTemplate>
     <DataTemplate x:Key="ChatTimelineAirBubbleTemplate">
-      <Grid Height="{Binding ReservedHeight}" Margin="0,0,0,0" HorizontalAlignment="Stretch" ClipToBounds="True">
+      <Grid Height="{Binding LayoutHeight}" Margin="0,0,0,0" HorizontalAlignment="Stretch" ClipToBounds="False">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
         <Border Grid.Row="0" Background="#ECEEF2" CornerRadius="12" Padding="10,4" HorizontalAlignment="Center" Margin="0,0,0,14" Visibility="{Binding Entry.ShowDateSeparator, Converter={StaticResource BooleanToVisibilityConverter}}">
           <TextBlock Text="{Binding Entry.DateSeparatorLabel}" Foreground="#8C949E" FontSize="11"/>
@@ -120,8 +120,6 @@
               <TextBlock Text="{Binding Entry.TimeLabel}" Foreground="#A1A8B2" FontSize="10.5" Margin="10,0,0,0"/>
             </StackPanel>
             <local:ReservedMessagePresenter
-                Width="{Binding ReservedBubbleWidth}"
-                Height="{Binding ReservedContentHeight}"
                 ReservedHeight="{Binding ReservedContentHeight}"
                 ReservedBubbleHeight="{Binding ReservedBubbleHeight}"
                 ReservedBubbleWidth="{Binding ReservedBubbleWidth}"
@@ -164,6 +162,7 @@
                          VerticalScrollBarVisibility="Auto"
                          HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.CanContentScroll="False"
+                         TextChanged="InputRichTextBox_OnTextChanged"
                          Text="{Binding Text, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
     </ControlTemplate>
     <Style x:Key="IconButton" TargetType="Button">
@@ -526,9 +525,9 @@
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
-        <Border Width="{Binding RelativeSource={RelativeSource AncestorType=local:ReservedMessagePresenter}, Path=ReservedBubbleWidth}"
-                Height="{Binding RelativeSource={RelativeSource AncestorType=local:ReservedMessagePresenter}, Path=ReservedBubbleHeight}"
-                BorderThickness="1" CornerRadius="15" Padding="16,12" ClipToBounds="True">
+        <Border MaxWidth="690"
+                BorderThickness="1" CornerRadius="15" Padding="16,12" ClipToBounds="False"
+                SizeChanged="ChatTimelineBubble_OnSizeChanged">
           <Border.Style>
             <Style TargetType="Border">
               <Setter Property="Background" Value="#FFFFFF"/>
@@ -548,7 +547,7 @@
                   <ItemsControl.ItemTemplate>
                     <DataTemplate>
                       <Grid>
-                        <local:AdaptiveMarkdownPresenter Markdown="{Binding Text}" DeferWhileStreaming="{Binding DataContext.Entry.IsStreamingText, RelativeSource={RelativeSource AncestorType=local:ReservedMessagePresenter}}" Foreground="#172033" FontFamily="华文中宋" FontSize="14" HorizontalAlignment="Left" Margin="0">
+                        <local:AdaptiveMarkdownPresenter Markdown="{Binding Text}" DeferWhileStreaming="{Binding IsStreamingText}" Foreground="#172033" FontFamily="华文中宋" FontSize="14" HorizontalAlignment="Left" Margin="0">
                           <local:AdaptiveMarkdownPresenter.Style>
                             <Style TargetType="local:AdaptiveMarkdownPresenter">
                               <Setter Property="Visibility" Value="Collapsed"/>
@@ -1002,7 +1001,7 @@
         <Grid Grid.Row="3" MinHeight="141">
           <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
           <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-          <emoji:TextBox x:Name="InputTextBox" Grid.Row="0" Grid.ColumnSpan="3" Margin="8,0,0,0" Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" BorderThickness="0" BorderBrush="Transparent" FocusVisualStyle="{x:Null}" Template="{StaticResource BorderlessEmojiTextBoxTemplate}" MinHeight="93" MaxHeight="192" VerticalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="False" VerticalContentAlignment="Top" FontSize="14" Foreground="#172033" Background="Transparent" PreviewKeyDown="InputTextBox_OnPreviewKeyDown" DataObject.Pasting="InputTextBox_OnPasting"/>
+          <emoji:TextBox x:Name="InputTextBox" Grid.Row="0" Grid.ColumnSpan="3" Margin="8,0,0,0" Text="{Binding InputText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" BorderThickness="0" BorderBrush="Transparent" FocusVisualStyle="{x:Null}" Template="{StaticResource BorderlessEmojiTextBoxTemplate}" MinHeight="93" MaxHeight="192" VerticalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.CanContentScroll="False" VerticalContentAlignment="Top" FontSize="14" Foreground="#172033" Background="Transparent" PreviewKeyDown="InputTextBox_OnPreviewKeyDown" TextChanged="InputTextBox_OnTextChanged" DataObject.Pasting="InputTextBox_OnPasting"/>
           <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,6,0,0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">

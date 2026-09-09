@@ -27,9 +27,11 @@ internal sealed class ChatTimelineController : IDisposable
     private readonly ObservableCollection<object> _items;
     private readonly ChatMessageLayoutCache _layoutCache = new();
     private readonly ChatTimelineLayoutIndex _layout;
+    private readonly ManagerLayoutCacheWriter _layoutCacheWriter;
     private readonly ChatTimelineSpacer _topSpacer = new();
     private readonly ChatTimelineSpacer _bottomSpacer = new();
     private readonly Dictionary<ManagerChatEntry, ChatTimelineMessageRow> _rows = new();
+    private readonly HashSet<ManagerChatEntry> _freshEntries = new();
     private readonly Dictionary<ManagerChatEntry, double> _persistentBubbleHeights = new();
     private readonly Dictionary<ManagerChatEntry, double> _persistentBubbleWidths = new();
     private readonly PriorityQueue<ChatTimelineMessageRow, double> _renderQueue = new();
@@ -63,6 +65,7 @@ internal sealed class ChatTimelineController : IDisposable
         _scrollViewer = scrollViewer;
         _items = items;
         _layout = new ChatTimelineLayoutIndex(_layoutCache);
+        _layoutCacheWriter = new ManagerLayoutCacheWriter(list.Dispatcher);
     }
 
     public void Attach()
@@ -85,6 +88,7 @@ internal sealed class ChatTimelineController : IDisposable
             return;
         }
 
+        _ = _layoutCacheWriter.FlushAsync();
         UnsubscribeEntries();
         CancelQueuedRendering();
         _entries = entries;
@@ -93,6 +97,7 @@ internal sealed class ChatTimelineController : IDisposable
         foreach (var entry in entries) entry.PropertyChanged += EntryOnPropertyChanged;
 
         _rows.Clear();
+        _freshEntries.Clear();
         _persistentBubbleHeights.Clear();
         _persistentBubbleWidths.Clear();
         _persistentBubbleWidthBucket = -1;
@@ -133,10 +138,11 @@ internal sealed class ChatTimelineController : IDisposable
         if (row.Index < 0 || row.Index >= _layout.Count || !ReferenceEquals(_layout[row.Index], row.Entry)) return;
 
         var delta = _layout.UpdateMeasuredHeight(row.Index, measurement.Width, measurement.Height);
-        if (Math.Abs(delta) < HeightEpsilon) return;
-
         row.ReservedHeight = _layout.GetHeight(row.Index);
         row.ReservedContentHeight = GetContentHeight(row.Entry, row.Index);
+        QueuePersistedMeasurement(row);
+        if (Math.Abs(delta) < HeightEpsilon) return;
+
         UpdateSpacerHeights();
         QueueSafeAnchorCompensation(row.Index, delta);
     }
@@ -155,6 +161,18 @@ internal sealed class ChatTimelineController : IDisposable
             measurement.Width));
     }
 
+    public void RecordNaturalBubbleSize(ChatTimelineMessageRow row, double width, double height)
+    {
+        if (_isDisposed || _entries is null || row.Index < 0 ||
+            row.Index >= _layout.Count || !ReferenceEquals(_layout[row.Index], row.Entry) ||
+            !double.IsFinite(width) || !double.IsFinite(height) || width < 24 || height < 24)
+            return;
+
+        row.ReservedBubbleWidth = Math.Clamp(width, 24, 12000);
+        row.ReservedBubbleHeight = Math.Clamp(height, 24, 12000);
+        QueuePersistedMeasurement(row);
+    }
+
     public void Dispose()
     {
         if (_isDisposed) return;
@@ -165,6 +183,7 @@ internal sealed class ChatTimelineController : IDisposable
         _scrollViewer.ScrollChanged -= ScrollViewerOnScrollChanged;
         UnsubscribeEntries();
         CancelQueuedRendering();
+        _layoutCacheWriter.Dispose();
         _items.Clear();
     }
 
@@ -176,7 +195,14 @@ internal sealed class ChatTimelineController : IDisposable
             foreach (var entry in e.NewItems.OfType<ManagerChatEntry>()) entry.PropertyChanged += EntryOnPropertyChanged;
 
         if (e.OldItems is not null)
-            foreach (var entry in e.OldItems.OfType<ManagerChatEntry>()) _rows.Remove(entry);
+            foreach (var entry in e.OldItems.OfType<ManagerChatEntry>())
+            {
+                _rows.Remove(entry);
+                _freshEntries.Remove(entry);
+            }
+
+        if (e.NewItems is not null)
+            foreach (var entry in e.NewItems.OfType<ManagerChatEntry>()) _freshEntries.Add(entry);
 
         SynchronizeLayout(preserveAnchor: true);
         QueueRefresh();
@@ -299,7 +325,10 @@ internal sealed class ChatTimelineController : IDisposable
         {
             if (!row.Entry.IsStreamingText && !row.Entry.IsThinking &&
                 (row.Index < start || row.Index > end))
+            {
                 row.RenderContent = false;
+                _freshEntries.Remove(row.Entry);
+            }
         }
 
         // A large jump (especially during startup or thumb dragging) can make
@@ -384,10 +413,12 @@ internal sealed class ChatTimelineController : IDisposable
             return row;
         }
 
-        // Always start with a fixed-height shell. The viewport scheduler below
-        // decides when the expensive Markdown/image template may be created.
+        // New messages stay on the natural-layout path while they are active.
+        // Historical rows start as fixed shells and are promoted by the
+        // viewport scheduler once they are close enough to the user.
+        var renderContent = entry.IsStreamingText || entry.IsThinking || _freshEntries.Contains(entry);
         row = new ChatTimelineMessageRow(entry, index, _layout.GetHeight(index), GetContentHeight(entry, index),
-            GetBubbleHeight(entry, index), GetBubbleWidth(entry), renderContent: false);
+            GetBubbleHeight(entry, index), GetBubbleWidth(entry), renderContent);
         _rows.Add(entry, row);
         return row;
     }
@@ -494,6 +525,23 @@ internal sealed class ChatTimelineController : IDisposable
                                  _scrollViewer.VerticalOffset >= _scrollViewer.ExtentHeight - _scrollViewer.ViewportHeight - 8;
 
     private double GetContentWidth() => Math.Max(1, _list.ActualWidth - _list.Padding.Left - _list.Padding.Right);
+
+    private void QueuePersistedMeasurement(ChatTimelineMessageRow row)
+    {
+        if (string.IsNullOrWhiteSpace(_sessionId) || row.Entry.IsTransientStatus ||
+            row.Entry.IsStreamingText || row.Entry.IsThinking || row.Index < 0)
+            return;
+
+        var contentWidth = GetContentWidth();
+        _layoutCacheWriter.Enqueue(_sessionId, ManagerLayoutCacheStore.GetWidthBucket(contentWidth),
+            new ManagerMessageLayoutCacheEntry
+            {
+                MessageIndex = row.Index,
+                RowHeight = row.ReservedHeight,
+                BubbleHeight = row.ReservedBubbleHeight,
+                BubbleWidth = row.ReservedBubbleWidth,
+            });
+    }
 
     private void ImportPersistentHeights(IReadOnlyList<ManagerChatEntry> entries, string? sessionId)
     {

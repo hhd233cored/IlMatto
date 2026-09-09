@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -21,6 +22,8 @@ public partial class ManagerWindow : Window
     private readonly List<string> _recentEmojis = new();
     private int _emojiSelectionStart;
     private int _emojiSelectionLength;
+    private TextPointer? _emojiSelectionStartPointer;
+    private TextPointer? _emojiSelectionEndPointer;
     private bool _emojiPickerInitialized;
     private bool _emojiPickerInitializing;
     private StackPanel? _recentEmojiSection;
@@ -30,6 +33,7 @@ public partial class ManagerWindow : Window
     private readonly ObservableCollection<object> _chatTimelineItems = new();
     private readonly bool _useAirBubbleTimeline;
     private readonly ManagerLayoutCacheRecorder _layoutCacheRecorder;
+    private bool _synchronizingInputEditor;
 
     public ManagerWindow()
     {
@@ -59,6 +63,10 @@ public partial class ManagerWindow : Window
         Loaded += async (_, _) =>
         {
             await viewModel.InitializeAsync();
+            // Emoji.Wpf has a second editor inside the TextBox template.  Its
+            // initial binding can finish after the VM restores the draft and
+            // otherwise leave the visible text and SendCommand out of sync.
+            await Dispatcher.InvokeAsync(() => SynchronizeInputEditor(viewModel), DispatcherPriority.Loaded);
             if (_useAirBubbleTimeline)
                 _chatTimelineController?.SetEntries(viewModel.ChatEntries, viewModel.SelectedConversation?.SessionId);
             await Dispatcher.InvokeAsync(() => GetChatScrollViewer()?.ScrollToEnd(), DispatcherPriority.Background);
@@ -219,6 +227,17 @@ public partial class ManagerWindow : Window
             _chatTimelineController?.RecordNaturalContentHeight(row, e);
     }
 
+    private void ChatTimelineBubble_OnSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (!_useAirBubbleTimeline || sender is not DependencyObject bubble ||
+            !double.IsFinite(e.NewSize.Width) || !double.IsFinite(e.NewSize.Height))
+            return;
+
+        var presenter = FindVisualParent<ReservedMessagePresenter>(bubble);
+        if (presenter?.DataContext is ChatTimelineMessageRow row)
+            _chatTimelineController?.RecordNaturalBubbleSize(row, e.NewSize.Width, e.NewSize.Height);
+    }
+
     private void DisposeManagerChatScrollViewer()
     {
         if (_managerChatScrollViewer is not null)
@@ -244,6 +263,17 @@ public partial class ManagerWindow : Window
             if (child is T match) return match;
             var nested = FindVisualChild<T>(child);
             if (nested is not null) return nested;
+        }
+        return null;
+    }
+
+    private static T? FindVisualParent<T>(DependencyObject child) where T : DependencyObject
+    {
+        var parent = VisualTreeHelper.GetParent(child);
+        while (parent is not null)
+        {
+            if (parent is T match) return match;
+            parent = VisualTreeHelper.GetParent(parent);
         }
         return null;
     }
@@ -289,6 +319,95 @@ public partial class ManagerWindow : Window
             viewModel.SendCommand.Execute(null);
     }
 
+    private void InputTextBox_OnTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_synchronizingInputEditor) return;
+
+        // Emoji.Wpf owns the editor template. Keep the VM synchronized even
+        // on builds where the outer TextBox only publishes its binding after
+        // focus leaves the control.
+        if (DataContext is ManagerViewModel viewModel)
+        {
+            var text = InputTextBox.Text ?? "";
+            // During startup or a session switch the template may briefly
+            // publish its default empty value. The VM/visible draft is the
+            // source of truth while the editor is not focused; do not erase a
+            // restored draft because of that transient notification.
+            if (string.IsNullOrEmpty(text) && !string.IsNullOrEmpty(viewModel.InputText) && !InputTextBox.IsKeyboardFocusWithin)
+            {
+                viewModel.SendCommand.NotifyCanExecuteChanged();
+                return;
+            }
+            if (!string.Equals(viewModel.InputText, text, StringComparison.Ordinal))
+                viewModel.InputText = text;
+            viewModel.SendCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    private void InputRichTextBox_OnTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_synchronizingInputEditor) return;
+
+        // The visible editor is the RichTextBox inside BorderlessEmojiTextBoxTemplate.
+        // Sync from that source directly so typing does not depend on a later
+        // ComboBox click/FocusLost to enable Send.
+        if (DataContext is not ManagerViewModel viewModel || sender is not Emoji.Wpf.RichTextBox editor)
+            return;
+
+        var text = editor.Text ?? "";
+        if (string.IsNullOrEmpty(text) && !string.IsNullOrEmpty(viewModel.InputText) &&
+            !editor.IsKeyboardFocusWithin && !InputTextBox.IsKeyboardFocusWithin)
+        {
+            viewModel.SendCommand.NotifyCanExecuteChanged();
+            return;
+        }
+        if (!string.Equals(viewModel.InputText, text, StringComparison.Ordinal))
+            viewModel.InputText = text;
+        viewModel.SendCommand.NotifyCanExecuteChanged();
+    }
+
+    private void SynchronizeInputEditor(ManagerViewModel viewModel)
+    {
+        if (!IsLoaded) return;
+
+        _synchronizingInputEditor = true;
+        try
+        {
+            InputTextBox.ApplyTemplate();
+            var text = viewModel.InputText ?? string.Empty;
+            var visibleText = InputTextBox.Text ?? string.Empty;
+
+            // If the outer control has retained the restored draft while the
+            // binding source briefly contains an empty value, preserve the
+            // text the user can see. In the normal path the VM remains the
+            // source of truth and is copied into both editor layers.
+            if (string.IsNullOrEmpty(text) && !string.IsNullOrEmpty(visibleText))
+            {
+                text = visibleText;
+                viewModel.InputText = text;
+            }
+            else if (!string.Equals(visibleText, text, StringComparison.Ordinal))
+            {
+                InputTextBox.Text = text;
+            }
+
+            var editor = FindVisualChild<Emoji.Wpf.RichTextBox>(InputTextBox);
+            if (editor is not null && !string.Equals(editor.Text, text, StringComparison.Ordinal))
+                editor.Text = text;
+
+            if (InputTextBox.CaretIndex > text.Length)
+                InputTextBox.CaretIndex = text.Length;
+        }
+        finally
+        {
+            _synchronizingInputEditor = false;
+        }
+
+        // The command may have been queried before the template finished
+        // binding. Re-evaluate it after both editor layers are synchronized.
+        viewModel.SendCommand.NotifyCanExecuteChanged();
+    }
+
     private void InputTextBox_OnPasting(object sender, DataObjectPastingEventArgs e)
     {
         if (DataContext is not ManagerViewModel viewModel) return;
@@ -305,8 +424,26 @@ public partial class ManagerWindow : Window
             return;
         }
 
+        var editor = FindVisualChild<Emoji.Wpf.RichTextBox>(InputTextBox);
         _emojiSelectionStart = InputTextBox.SelectionStart;
         _emojiSelectionLength = InputTextBox.SelectionLength;
+        if (editor is not null)
+        {
+            // Emoji.Wpf exposes a second, emoji-aware Selection property that
+            // is rebuilt from the base RichTextBox selection on selection
+            // changes. Use the base selection/CaretPosition as the snapshot
+            // source so a collapsed caret is not interpreted as the start of
+            // the preceding text run.
+            var baseEditor = (System.Windows.Controls.RichTextBox)editor;
+            var selection = baseEditor.Selection;
+            _emojiSelectionStartPointer = selection.IsEmpty ? baseEditor.CaretPosition : selection.Start;
+            _emojiSelectionEndPointer = selection.IsEmpty ? baseEditor.CaretPosition : selection.End;
+        }
+        else
+        {
+            _emojiSelectionStartPointer = null;
+            _emojiSelectionEndPointer = null;
+        }
         EmojiPopup.IsOpen = true;
         await InitializeEmojiPickerAsync();
     }
@@ -472,17 +609,80 @@ public partial class ManagerWindow : Window
     {
         if (string.IsNullOrEmpty(emoji)) return;
 
-        var start = Math.Clamp(_emojiSelectionStart, 0, InputTextBox.Text?.Length ?? 0);
-        var length = Math.Clamp(_emojiSelectionLength, 0, (InputTextBox.Text?.Length ?? 0) - start);
-        var text = InputTextBox.Text ?? string.Empty;
-        InputTextBox.Text = text.Remove(start, length).Insert(start, emoji);
-        InputTextBox.CaretIndex = start + emoji.Length;
-        InputTextBox.SelectionLength = 0;
+        EmojiPopup.IsOpen = false;
+        var editor = FindVisualChild<Emoji.Wpf.RichTextBox>(InputTextBox);
+        var insertedIntoEditor = false;
+
+        // The actual caret belongs to the RichTextBox inside the Emoji.Wpf
+        // template. Preserve and restore its TextPointer range so losing
+        // focus to the popup cannot move insertion to index zero. Use the
+        // base RichTextBox selection setter for the replacement: WPF advances
+        // that selection to the end of the inserted text, while a collapsed
+        // TextRange's End can remain at the old caret boundary.
+        if (editor is not null && _emojiSelectionStartPointer is not null && _emojiSelectionEndPointer is not null)
+        {
+            try
+            {
+                var baseEditor = (System.Windows.Controls.RichTextBox)editor;
+                var selection = baseEditor.Selection;
+                editor.Focus();
+                selection.Select(_emojiSelectionStartPointer, _emojiSelectionEndPointer);
+                selection.Text = emoji;
+                var caret = selection.End;
+
+                var updatedText = editor.Text ?? string.Empty;
+                _synchronizingInputEditor = true;
+                try
+                {
+                    if (!string.Equals(InputTextBox.Text, updatedText, StringComparison.Ordinal))
+                        InputTextBox.Text = updatedText;
+                }
+                finally
+                {
+                    _synchronizingInputEditor = false;
+                }
+
+                if (DataContext is ManagerViewModel viewModel && !string.Equals(viewModel.InputText, updatedText, StringComparison.Ordinal))
+                    viewModel.InputText = updatedText;
+
+                // Keep the caret at the end of the newly inserted emoji after
+                // the outer TextBox binding has observed the new text.
+                editor.Focus();
+                baseEditor.Selection.Select(caret, caret);
+                baseEditor.CaretPosition = caret;
+                insertedIntoEditor = true;
+            }
+            catch (ArgumentException)
+            {
+                // The document may have been recreated while the popup was
+                // open. Fall back to the outer control's saved index below.
+            }
+            catch (InvalidOperationException)
+            {
+                // Same fallback for a stale TextPointer from a recycled
+                // template/document.
+            }
+        }
+
+        if (!insertedIntoEditor)
+        {
+            var start = Math.Clamp(_emojiSelectionStart, 0, InputTextBox.Text?.Length ?? 0);
+            var length = Math.Clamp(_emojiSelectionLength, 0, (InputTextBox.Text?.Length ?? 0) - start);
+            var text = InputTextBox.Text ?? string.Empty;
+            InputTextBox.Text = text.Remove(start, length).Insert(start, emoji);
+            InputTextBox.CaretIndex = start + emoji.Length;
+            InputTextBox.SelectionLength = 0;
+        }
+
         _recentEmojis.Remove(emoji);
         _recentEmojis.Insert(0, emoji);
         if (_recentEmojis.Count > 24) _recentEmojis.RemoveAt(_recentEmojis.Count - 1);
-        EmojiPopup.IsOpen = false;
-        InputTextBox.Focus();
+        if (insertedIntoEditor)
+            editor?.Focus();
+        else
+            InputTextBox.Focus();
+        _emojiSelectionStartPointer = null;
+        _emojiSelectionEndPointer = null;
         Dispatcher.BeginInvoke(UpdateRecentEmojiSection, DispatcherPriority.Background);
     }
 

@@ -138,6 +138,10 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
 
     private ManagerHostProcess? _host;
     private ManagerPipeClient? _pipe;
+    private readonly object _hostStartGate = new();
+    private Task? _hostStartTask;
+    private readonly object _sessionStartGate = new();
+    private readonly Dictionary<string, Task> _sessionStartTasks = new(StringComparer.Ordinal);
     private ManagerChatEntry? _streamingManager;
     private ManagerChatEntry? _streamingManagerStatus;
     private ManagerConversationItem? _streamingManagerStatusConversation;
@@ -182,7 +186,9 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         }
         SortConversationsByLastUserMessage();
         if (Conversations.Count == 0) Conversations.Add(CreateConversation());
-        SelectedConversation = Conversations.First();
+        SelectedConversation = Conversations.FirstOrDefault(conversation =>
+            string.Equals(conversation.SessionId, settings.LastManagerSessionId, StringComparison.Ordinal))
+            ?? Conversations.First();
     }
 
     public ObservableCollection<ManagerConversationItem> Conversations { get; } = new();
@@ -499,6 +505,10 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         _draftSaveTimer.Tick += (_, _) => SaveDraftIfDirty();
         RestoreDraft(SelectedConversation);
         ResetDraftSaveTimer();
+        // The initial conversation is selected before the window is loaded.
+        // Refresh the generated command after restoring its draft so the
+        // send button does not keep the constructor-time CanExecute value.
+        SendCommand.NotifyCanExecuteChanged();
         await ActivateSelectedConversationAsync();
     }
 
@@ -753,16 +763,76 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
 
     private async Task EnsureHostAsync()
     {
-        if (_pipe is null)
+        if (_pipe is not null) return;
+
+        Task startTask;
+        lock (_hostStartGate)
         {
-            _hostStartedSessionIds.Clear();
-            _activatingSessionIds.Clear();
-            _host = new ManagerHostProcess(); _pipe = await _host.StartAsync();
-            _pipe.EventReceived += OnHostEvent; _pipe.TransportError += OnTransportError;
+            if (_pipe is not null) return;
+            _hostStartTask ??= StartHostCoreAsync();
+            startTask = _hostStartTask;
+        }
+
+        try
+        {
+            await startTask;
+        }
+        catch
+        {
+            lock (_hostStartGate)
+            {
+                if (ReferenceEquals(_hostStartTask, startTask)) _hostStartTask = null;
+            }
+            throw;
         }
     }
 
-    private async Task StartOrSyncSessionAsync(ManagerConversationItem conversation)
+    private async Task StartHostCoreAsync()
+    {
+        _hostStartedSessionIds.Clear();
+        _activatingSessionIds.Clear();
+        var host = new ManagerHostProcess();
+        try
+        {
+            var pipe = await host.StartAsync();
+            pipe.EventReceived += OnHostEvent;
+            pipe.TransportError += OnTransportError;
+            _host = host;
+            _pipe = pipe;
+        }
+        catch
+        {
+            await host.DisposeAsync();
+            throw;
+        }
+    }
+
+    private Task StartOrSyncSessionAsync(ManagerConversationItem conversation)
+    {
+        lock (_sessionStartGate)
+        {
+            if (_sessionStartTasks.TryGetValue(conversation.SessionId, out var existing))
+                return existing;
+
+            var task = StartOrSyncSessionCoreAsync(conversation);
+            _sessionStartTasks[conversation.SessionId] = task;
+            _ = task.ContinueWith(
+                completed =>
+                {
+                    lock (_sessionStartGate)
+                    {
+                        if (_sessionStartTasks.TryGetValue(conversation.SessionId, out var current) && ReferenceEquals(current, completed))
+                            _sessionStartTasks.Remove(conversation.SessionId);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return task;
+        }
+    }
+
+    private async Task StartOrSyncSessionCoreAsync(ManagerConversationItem conversation)
     {
         await EnsureHostAsync();
         await _pipe!.SendAsync(new StartManagerSessionMessage(
@@ -776,6 +846,19 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     private async Task ActivateCachedSessionAsync(ManagerConversationItem conversation)
     {
         await EnsureHostAsync();
+
+        // Startup activation and the first send can arrive at the same time.
+        // Reuse the in-flight full start instead of racing a second start or
+        // sending a message before Manager Host has registered the session.
+        Task? pendingStart;
+        lock (_sessionStartGate)
+            _sessionStartTasks.TryGetValue(conversation.SessionId, out pendingStart);
+        if (pendingStart is not null)
+        {
+            await pendingStart;
+            return;
+        }
+
         if (!_hostStartedSessionIds.Contains(conversation.SessionId))
         {
             await StartOrSyncSessionAsync(conversation);
@@ -789,6 +872,16 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     private async Task EnsureSessionReadyAsync(ManagerConversationItem conversation)
     {
         await EnsureHostAsync();
+
+        Task? pendingStart;
+        lock (_sessionStartGate)
+            _sessionStartTasks.TryGetValue(conversation.SessionId, out pendingStart);
+        if (pendingStart is not null)
+        {
+            await pendingStart;
+            return;
+        }
+
         if (_hostStartedSessionIds.Contains(conversation.SessionId))
         {
             _activatingSessionIds.Add(conversation.SessionId);
@@ -975,11 +1068,16 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (!DateTimeOffset.TryParse(message.StartedAt, out var startedAt)) return;
         if (entry.Runtime is null || !string.Equals(entry.Runtime.TurnId, message.TurnId, StringComparison.Ordinal))
             entry.Runtime = new TaskRuntimeInfo(null, message.TurnId, startedAt, message.State ?? "responding");
-        var terminal = message.State is "idle" or "cancelled" or "error";
+        // manager_completed is the terminal event for the visible Agent
+        // answer, but its wire shape carries completedAt/durationMs instead
+        // of a state field. Treating the missing state as "responding" here
+        // restarted the elapsed timer exactly when the answer had finished.
+        var completedEvent = message.Type == "manager_completed" && message.Final != false;
+        var terminal = completedEvent || message.State is "idle" or "cancelled" or "error";
         if (terminal)
         {
             var ended = DateTimeOffset.TryParse(message.CompletedAt, out var completedAt) ? completedAt : DateTimeOffset.UtcNow;
-            entry.Runtime.Mark(message.State ?? "idle", ended, message.DurationMs);
+            entry.Runtime.Mark(message.State ?? (completedEvent ? "completed" : "idle"), ended, message.DurationMs);
         }
         else
         {
@@ -1107,7 +1205,11 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     {
         if (message.Type == "manager_host_ready")
         {
-            _hostStartedSessionIds.Clear();
+            // The host-ready line is sent immediately when the socket opens
+            // and may be delivered after the first start request has already
+            // updated _hostStartedSessionIds. The collections are reset when
+            // StartHostCoreAsync creates a new host; clearing them here would
+            // make the first send race the late host-ready notification.
             _activatingSessionIds.Clear();
             return;
         }
@@ -2454,8 +2556,31 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         ResetChatWindow(value);
         RestoreDraft(value);
         ResetDraftSaveTimer();
+        // A restored draft can equal the previous InputText value, in which
+        // case the generated setter callback is not raised. Refresh here so
+        // switching into the initial/empty conversation cannot leave Send
+        // disabled with a stale CanExecute result.
+        SendCommand.NotifyCanExecuteChanged();
+        PersistLastSelectedSessionId(value?.SessionId);
         NotifyCurrentProviderChanged();
         if (_initialized) _ = ActivateSelectedConversationAsync();
+    }
+
+    private static void PersistLastSelectedSessionId(string? sessionId)
+    {
+        try
+        {
+            var settings = SettingsStore.Load();
+            var normalized = sessionId?.Trim() ?? "";
+            if (string.Equals(settings.LastManagerSessionId, normalized, StringComparison.Ordinal)) return;
+            settings.LastManagerSessionId = normalized;
+            SettingsStore.Save(settings);
+        }
+        catch
+        {
+            // Restoring the last selected conversation is a convenience; a
+            // settings write failure must never block conversation switching.
+        }
     }
     partial void OnUserIdChanged(string value) => OnPropertyChanged(nameof(UserAvatarText));
     partial void OnUserAvatarPathChanged(string value)
