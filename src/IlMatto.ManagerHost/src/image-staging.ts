@@ -92,7 +92,7 @@ export function buildImageAwareCompanionPrompt(userMessage: string, images: read
 
 ${buildCompanionWebResearchInstructions()}
 
-For ordinary image descriptions, OCR, or UI analysis, use the exact managed image path only when visual inspection is needed. Never inspect a parent directory, a workspace file, or an arbitrary path merely to infer information from the image. The selected attachment will be sent to Google Cloud Vision when the available image lookup tool is used.
+For ordinary image descriptions, OCR, or UI analysis, use the exact managed image path only when visual inspection is needed. Never inspect a parent directory, a workspace file, or an arbitrary path merely to infer information from the image.
 
 Managed image attachment(s) for this turn:
 ${paths}
@@ -100,7 +100,6 @@ ${paths}
 Image tool instructions:
 - Treat the paths above as local attachments supplied by the user.
 - If a built-in image tool requires a path, pass one of the paths above exactly as written.
-- The identify_image MCP tool is available for read-only web image lookup. When image identification is useful, call it with the matching attachment_id rather than inventing a local path. Treat its returned entities as candidates and supporting evidence, not as a guaranteed answer.
 - Do not use run_command, grep_search, or any file/terminal tool after web research unless the user's message explicitly asks for it.
 
 User message:

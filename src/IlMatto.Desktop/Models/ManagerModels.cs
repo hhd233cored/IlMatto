@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
-using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace IlMatto.Desktop.Models;
@@ -57,8 +56,6 @@ public sealed class ManagerCompanionProfile
 
 public sealed class ManagerImageAttachment
 {
-    private BitmapImage? _previewImage;
-
     public string Type { get; set; } = "image";
     public string AttachmentId { get; set; } = Guid.NewGuid().ToString("N");
     public string Path { get; set; } = "";
@@ -66,36 +63,6 @@ public sealed class ManagerImageAttachment
     public string MimeType { get; set; } = "";
     public int Order { get; set; }
     public bool IsStaged { get; set; }
-
-    /// <summary>
-    /// Loads a detached, frozen bitmap so WPF does not keep the attachment
-    /// file open while the conversation is displayed. The path remains the
-    /// persisted source of truth; this property is only a UI projection.
-    /// </summary>
-    [JsonIgnore]
-    public BitmapImage? PreviewImage
-    {
-        get
-        {
-            if (_previewImage is not null) return _previewImage;
-            if (string.IsNullOrWhiteSpace(Path) || !System.IO.File.Exists(Path)) return null;
-            try
-            {
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit();
-                bitmap.UriSource = new Uri(System.IO.Path.GetFullPath(Path), UriKind.Absolute);
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-                bitmap.EndInit();
-                bitmap.Freeze();
-                return _previewImage = bitmap;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-    }
 
     public static ManagerImageAttachment FromPath(string path)
     {
@@ -151,7 +118,7 @@ public sealed class ManagerMainAgentBinding
 public sealed class ManagerCodingAgentBinding
 {
     public string Provider { get; set; } = "antigravity";
-    public string CliPath { get; set; } = "codex";
+    public string CliPath { get; set; } = "agy";
     // Retained for old conversation snapshots only. Current Manager requests
     // use the global provider settings instead.
     public string Model { get; set; } = "";
@@ -242,9 +209,11 @@ public partial class ManagerChatEntry : ObservableObject
     public void Append(string value)
     {
         if (string.IsNullOrEmpty(value)) return;
+        var previousText = Text;
         Text += value;
         var last = Segments.LastOrDefault();
-        if (last?.IsText == true) last.Text += value;
+        if (last?.IsText == true)
+            last.Text = ReferenceEquals(last.Text, previousText) ? Text : last.Text + value;
         else Segments.Add(new ChatSegment("text", value));
         OnPropertyChanged(nameof(HasMessageBody));
     }

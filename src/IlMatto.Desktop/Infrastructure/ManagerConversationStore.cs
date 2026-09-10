@@ -10,12 +10,34 @@ public static class ManagerConversationStore
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
     private static string StorePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "IlMatto", "manager-sessions", "conversations.json");
 
-    public static IReadOnlyList<ManagerConversationItem> Load()
+    public static IReadOnlyList<ManagerConversationItem> Load() => Load(StorePath);
+
+    internal static IReadOnlyList<ManagerConversationItem> Load(string storePath)
     {
         try
         {
-            if (!File.Exists(StorePath)) return Array.Empty<ManagerConversationItem>();
-            var snapshots = JsonSerializer.Deserialize<List<Snapshot>>(File.ReadAllText(StorePath), Options) ?? new();
+            if (!File.Exists(storePath)) return Array.Empty<ManagerConversationItem>();
+            using var input = File.OpenRead(storePath);
+            // Existing manually edited files may have a UTF-8/UTF-16/UTF-32
+            // BOM. Preserve ReadAllText's encoding support for those files;
+            // ordinary UTF-8 snapshots stay on the allocation-light stream path.
+            Span<byte> prefix = stackalloc byte[4];
+            var prefixLength = input.Read(prefix);
+            input.Position = 0;
+            List<Snapshot>? snapshots;
+            if (prefixLength >= 3 && prefix[0] == 0xEF && prefix[1] == 0xBB && prefix[2] == 0xBF)
+            {
+                input.Position = 3;
+                snapshots = JsonSerializer.Deserialize<List<Snapshot>>(input, Options);
+            }
+            else if (prefixLength >= 2 && ((prefix[0] == 0xFF && prefix[1] == 0xFE) || (prefix[0] == 0xFE && prefix[1] == 0xFF)) ||
+                     prefixLength == 4 && prefix[0] == 0 && prefix[1] == 0 && prefix[2] == 0xFE && prefix[3] == 0xFF)
+            {
+                using var reader = new StreamReader(input);
+                snapshots = JsonSerializer.Deserialize<List<Snapshot>>(reader.ReadToEnd(), Options);
+            }
+            else snapshots = JsonSerializer.Deserialize<List<Snapshot>>(input, Options);
+            snapshots ??= new();
             return snapshots.Select(snapshot =>
             {
                 var mainAgent = snapshot.MainAgent ?? new ManagerMainAgentBinding { Provider = "antigravity", SessionRef = snapshot.AntigravityConversationId };
@@ -59,7 +81,7 @@ public static class ManagerConversationStore
                     // interrupted mid-turn. Never resurrect an active
                     // “正在思考” state after restart; keep the text as a
                     // completed, collapsible excerpt instead.
-                    // Older Codex builds streamed the structured CodeResult as
+                    // Older coding builds streamed the structured CodeResult as
                     // ordinary chat text. Restore those entries in the same
                     // shape as the Pi workbench instead of showing raw JSON.
                     var restoredText = IsStructuredCodeResultText(message.Text)
@@ -89,7 +111,10 @@ public static class ManagerConversationStore
                         entry.Text = restoredText;
                         foreach (var segment in message.Segments)
                         {
-                            var restoredSegment = new ChatSegment(segment.Kind ?? "text", segment.Text ?? "") { IsExpanded = segment.IsExpanded };
+                            var segmentText = segment.Text ?? "";
+                            if (message.Segments.Count == 1 && string.Equals(segmentText, entry.Text, StringComparison.Ordinal))
+                                segmentText = entry.Text;
+                            var restoredSegment = new ChatSegment(segment.Kind ?? "text", segmentText) { IsExpanded = segment.IsExpanded };
                             foreach (var operation in segment.Operations ?? new())
                             {
                                 var restoredOperation = new ProcessItem(operation.Kind ?? "工具", operation.Title ?? "工具", operation.Status ?? "完成", operation.Details ?? "", operation.CallId, operation.CommandLine)
@@ -121,10 +146,15 @@ public static class ManagerConversationStore
         catch { return Array.Empty<ManagerConversationItem>(); }
     }
 
-    public static void Save(IEnumerable<ManagerConversationItem> conversations)
+    public static void Save(IEnumerable<ManagerConversationItem> conversations) => CreateSaveOperation(conversations)();
+
+    // Capture on the UI thread. The returned operation owns a detached snapshot
+    // and may serialize it in the background while the live models keep changing.
+    public static Action CreateSaveOperation(IEnumerable<ManagerConversationItem> conversations) =>
+        CreateSaveOperation(conversations, StorePath);
+
+    internal static Action CreateSaveOperation(IEnumerable<ManagerConversationItem> conversations, string storePath)
     {
-        var directory = Path.GetDirectoryName(StorePath)!;
-        Directory.CreateDirectory(directory);
         var snapshots = conversations.OrderByDescending(item => item.ListTimestamp).ThenByDescending(item => item.UpdatedAt).Take(100).Select(item => new Snapshot
         {
             SessionId = item.SessionId, Title = item.Title, WorkspacePath = item.WorkspacePath,
@@ -133,7 +163,7 @@ public static class ManagerConversationStore
             // New snapshots persist only the role card. UserProfile is kept
             // in the legacy DTO below solely for one-time migration.
             CompanionProfile = new CompanionProfileSnapshot { CharacterName = item.CompanionProfile.CharacterName, CharacterPrompt = item.CompanionProfile.CharacterPrompt },
-            MainAgent = item.MainAgent, CodingAgent = item.CodingAgent,
+            MainAgent = Clone(item.MainAgent), CodingAgent = Clone(item.CodingAgent),
             Messages = item.Messages.Select(message => new MessageSnapshot
             {
                 Role = message.Role,
@@ -143,7 +173,7 @@ public static class ManagerConversationStore
                 Text = Limit(message.Text),
                 ThinkingText = Limit(message.ThinkingText),
                 IsThinking = message.IsThinking,
-                CodeResult = message.CodeResult,
+                CodeResult = Clone(message.CodeResult),
                 Runtime = message.Runtime is null ? null : new RuntimeSnapshot
                 {
                     TaskId = message.Runtime.TaskId,
@@ -179,10 +209,26 @@ public static class ManagerConversationStore
                 }).ToList()
             }).ToList()
         }).ToList();
-        var temporary = StorePath + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(snapshots, Options));
-        File.Move(temporary, StorePath, true);
+        return () =>
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(storePath)!);
+            var temporary = storePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var output = File.Create(temporary)) JsonSerializer.Serialize(output, snapshots, Options);
+                File.Move(temporary, storePath, true);
+            }
+            finally
+            {
+                if (File.Exists(temporary)) File.Delete(temporary);
+            }
+        };
     }
+
+    // These small mutable bindings/results are the only snapshot fields still
+    // shared by reference with the UI. Keep their existing JSON shape intact.
+    private static T? Clone<T>(T? value) where T : class => value is null ? null :
+        JsonSerializer.SerializeToElement(value, Options).Deserialize<T>(Options);
 
     private static string Limit(string value) => value.Length <= 64_000 ? value : value[..64_000] + "\n…（内容已截断）";
 

@@ -14,8 +14,8 @@ using IlMatto.Desktop.Models;
 
 namespace IlMatto.Desktop;
 
-public sealed record CodexApprovalPolicyChoice(string Value, string DisplayName, string Description);
-public sealed record CodexSandboxModeChoice(string Value, string DisplayName, string Description);
+public sealed record AgentPermissionChoice(string Value, string DisplayName, string Description);
+public sealed record TerminalSandboxChoice(string Value, string DisplayName, string Description);
 public sealed record ReasoningEffortChoice(string Value, string DisplayName, string Description);
 /// <summary>
 /// A model entry shown in the model picker.  Antigravity may publish the
@@ -109,11 +109,10 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         public PendingManagerBubble? ManagerInputBubble;
         public StringBuilder PendingCodingText { get; set; } = new();
         public string? ActiveCodingTaskId;
-        public string? PendingCodexDraftId;
         public List<ManagerActivity> Activities { get; } = new();
         public List<ApprovalRequest> PendingApprovals { get; } = new();
-        public List<ManagerHostEvent> BufferedEvents { get; } = new();
-        public bool CodexBusy;
+        public ManagerEventBuffer BufferedEvents { get; } = new();
+        public bool CodingBusy;
     }
 
     private sealed class AntigravityModelBuilder
@@ -152,11 +151,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     private DispatcherTimer? _codingTextTimer;
     private StringBuilder _pendingCodingText = new();
     private bool _initialized;
-    private TaskCompletionSource<ManagerHostEvent>? _codexProbeCompletion;
-    private TaskCompletionSource<ManagerHostEvent>? _codexLoginCompletion;
     private string? _activeCodingTaskId;
-    /** Draft id associated with the @codex text currently in the input box. */
-    private string? _pendingCodexDraftId;
     private DispatcherTimer? _draftSaveTimer;
     private bool _draftDirty;
     private bool _isRestoringDraft;
@@ -164,6 +159,12 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<string, TaskCompletionSource<bool>> _pendingSessionDeletions = new(StringComparer.Ordinal);
     private bool _replayingBackgroundEvents;
     private DispatcherTimer? _taskDurationTimer;
+    private readonly ActiveTaskRuntimes _activeRuntimes = new();
+    private readonly ManagerConversationWriter _conversationWriter;
+    private readonly bool _suppressSettingsPersistence;
+    private bool _isShuttingDown;
+    private ManagerConversationItem? _shutdownConversation;
+    private ManagerConversationItem? EventConversation => _shutdownConversation ?? SelectedConversation;
     private readonly ObservableCollection<ManagerChatEntry> _emptyChatEntries = new();
     private readonly HashSet<string> _hostStartedSessionIds = new(StringComparer.Ordinal);
     private readonly HashSet<string> _activatingSessionIds = new(StringComparer.Ordinal);
@@ -171,6 +172,8 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
 
     public ManagerViewModel()
     {
+        _conversationWriter = new ManagerConversationWriter(Dispatcher.CurrentDispatcher,
+            () => ManagerConversationStore.CreateSaveOperation(Conversations));
         var settings = SettingsStore.Load();
         LoadSettings(settings);
         SelectedModelProvider = "antigravity";
@@ -191,38 +194,33 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
             ?? Conversations.First();
     }
 
+    // A disconnected session model also lets local regression checks exercise
+    // events/persistence without credentials, user settings, or a live Host.
+    internal ManagerViewModel(IEnumerable<ManagerConversationItem> conversations, Func<Action> capture)
+    {
+        _suppressSettingsPersistence = true;
+        _conversationWriter = new ManagerConversationWriter(Dispatcher.CurrentDispatcher, capture);
+        foreach (var conversation in conversations) Conversations.Add(conversation);
+        selectedConversation = Conversations.FirstOrDefault();
+    }
+
     public ObservableCollection<ManagerConversationItem> Conversations { get; } = new();
     public ObservableCollection<ManagerActivity> Activities { get; } = new();
     public ObservableCollection<ApprovalRequest> PendingApprovals { get; } = new();
     public ObservableCollection<ManagerImageAttachment> PendingImageAttachments { get; } = new();
     public ObservableCollection<TaskExecutorChoice> TaskExecutors { get; } = new()
     {
-        new("default", "自动（按会话默认）"), new("antigravity", "Antigravity"), new("pi", "Pi"), new("codex", "Codex"),
-    };
-    /// <summary>Codex's native approval policies plus IlMatto's always extension.</summary>
-    public ObservableCollection<CodexApprovalPolicyChoice> CodexApprovalPolicies { get; } = new()
-    {
-        new("untrusted", "untrusted", "对不在信任范围内的命令进行确认。"),
-        new("on-request", "on-request", "需要权限或跨越沙箱边界时请求确认。"),
-        new("never", "never", "不显示审批提示；受限操作可能失败。"),
-        new("always", "always", "自动接受 Codex 发起的审批请求。"),
-    };
-    /// <summary>Codex's native sandbox modes.</summary>
-    public ObservableCollection<CodexSandboxModeChoice> CodexSandboxModes { get; } = new()
-    {
-        new("read-only", "read-only", "只能查看文件，不能修改工作区。"),
-        new("workspace-write", "workspace-write", "允许在工作区内编辑文件并运行常规命令。"),
-        new("danger-full-access", "danger-full-access", "不限制文件系统或网络访问。"),
+        new("default", "自动（按会话默认）"), new("antigravity", "Antigravity"), new("pi", "Pi"),
     };
     /// <summary>Antigravity's native permission presets surfaced by the CLI.</summary>
-    public ObservableCollection<CodexApprovalPolicyChoice> AntigravityApprovalPolicies { get; } = new()
+    public ObservableCollection<AgentPermissionChoice> AntigravityApprovalPolicies { get; } = new()
     {
         new("request-review", "request-review", "需要用户批准工具和高风险操作。"),
         new("proceed-in-sandbox", "proceed-in-sandbox", "在沙箱中执行，必要时请求批准。"),
         new("always-proceed", "always-proceed", "自动继续执行工具操作。"),
         new("strict", "strict", "严格限制工具操作。"),
     };
-    public ObservableCollection<CodexSandboxModeChoice> AntigravitySandboxModes { get; } = new()
+    public ObservableCollection<TerminalSandboxChoice> AntigravitySandboxModes { get; } = new()
     {
         new("disabled", "disabled", "不启用终端沙箱。"),
         new("enabled", "enabled", "在终端沙箱中运行命令。"),
@@ -233,14 +231,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         new("medium", "medium", "在速度与推理深度之间平衡。"),
         new("high", "high", "更充分推理，响应时间更长。"),
     };
-    public ObservableCollection<ReasoningEffortChoice> CodexReasoningEfforts { get; } = new()
-    {
-        new("minimal", "minimal", "使用最少推理。"),
-        new("low", "low", "更快响应，使用较少推理。"),
-        new("medium", "medium", "在速度与推理深度之间平衡。"),
-        new("high", "high", "更充分推理，响应时间更长。"),
-        new("xhigh", "xhigh", "使用最高推理强度。"),
-    };
     /// <summary>
     /// The model menu is intentionally populated with a safe Auto entry first;
     /// real provider models arrive asynchronously from the ManagerHost probe.
@@ -250,10 +240,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         new("antigravity", "Antigravity", new[]
         {
             new AgentModelChoice("antigravity", "", "Auto", "使用 Antigravity 默认模型。"),
-        }),
-        new("codex", "Codex", new[]
-        {
-            new AgentModelChoice("codex", "", "Auto", "使用 Codex 默认模型。"),
         }),
     };
     /// <summary>
@@ -305,11 +291,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty] private string antigravityExecutionPolicy = "approval";
     [ObservableProperty] private string antigravityToolPermission = "always-proceed";
     [ObservableProperty] private bool antigravityTerminalSandbox;
-    [ObservableProperty] private string codexCliPath = "codex";
-    [ObservableProperty] private string codexModel = "";
-    [ObservableProperty] private string codexEffort = "medium";
-    [ObservableProperty] private string codexApprovalPolicy = "on-request";
-    [ObservableProperty] private string codexSandboxMode = "workspace-write";
     [ObservableProperty] private string selectedModelProvider = "antigravity";
     [ObservableProperty] private string selectedModelId = "";
     [ObservableProperty] private bool isModelMenuOpen;
@@ -328,24 +309,20 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     public ApprovalRequest? CurrentApproval => PendingApprovals.FirstOrDefault();
     public bool HasApproval => CurrentApproval is not null;
     public string PendingApprovalCountLabel => PendingApprovals.Count > 1 ? $"另有 {PendingApprovals.Count - 1} 项等待确认" : "";
-    public bool CanSend => !IsBusy && (!string.IsNullOrWhiteSpace(InputText) || PendingImageAttachments.Count > 0);
-    public bool CanCancel => IsBusy || (SelectedConversation is not null && GetSessionUiState(SelectedConversation).CodexBusy);
-    public bool CanVerifyLastCodexTask => !IsBusy && LastCompletedCodexTaskId is not null;
-    private string? LastCompletedCodexTaskId => SelectedConversation?.Messages
-        .LastOrDefault(item => item.Source == "codex" && item.CodeResult?.Status == "completed" && !string.IsNullOrWhiteSpace(item.TaskId))?.TaskId;
+    public bool CanSend => !_isShuttingDown && !IsBusy && (!string.IsNullOrWhiteSpace(InputText) || PendingImageAttachments.Count > 0);
+    public bool CanCancel => IsBusy;
     public bool HasPendingImageAttachments => PendingImageAttachments.Count > 0;
     public bool HasUserAvatar => UserAvatarImage is not null;
     public bool HasAgentAvatar => AgentAvatarImage is not null;
     public string UserAvatarText => FirstAvatarCharacter(UserId, "你");
-    public bool IsCodexCodingAgent => SelectedConversation?.CodingAgent?.Provider == "codex";
     public string MainConnectionLabel => !MainProviderAvailable ? $"{CurrentMainDisplayName} 不可用" : MainProviderAuthenticated ? $"{CurrentMainDisplayName} 已连接 {MainProviderVersion}".Trim() : $"{CurrentMainDisplayName} 等待认证";
     public string ManagerCacheLabel => ManagerCacheReadTokens is long tokens ? $"缓存读取：{tokens:N0} tokens" : "缓存统计：服务未提供";
     public string ManagerContextLabel => ManagerContextTokens is long used ? $"上下文：{used:N0}{(ManagerContextWindow is long window ? $" / {window:N0}" : "")} tokens" : "上下文统计：服务未提供";
     public string WorkspaceLabel => string.IsNullOrWhiteSpace(SelectedConversation?.WorkspacePath) ? "未选择工作区" : SelectedConversation.WorkspacePath;
-    public string CurrentCompanionName => SelectedConversation?.CompanionDisplayName ?? (string.IsNullOrWhiteSpace(CompanionCharacterName) ? "角色" : CompanionCharacterName.Trim());
+    public string CurrentCompanionName => EventConversation?.CompanionDisplayName ?? (string.IsNullOrWhiteSpace(CompanionCharacterName) ? "角色" : CompanionCharacterName.Trim());
     public string CurrentCompanionTitle => $"IlMatto · {CurrentCompanionName}";
     public string CurrentMainDisplayName => CurrentCompanionName;
-    public string CurrentCodingDisplayName => SelectedConversation?.CodingAgent?.DisplayName ?? "Pi";
+    public string CurrentCodingDisplayName => EventConversation?.CodingAgent?.DisplayName ?? "Pi";
     public string CurrentProviderLabel => SelectedConversation?.ProviderLabel ?? $"{CurrentCompanionName}（Antigravity） → Pi";
     public string SelectedModelLabel
     {
@@ -356,7 +333,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
             return choice?.DisplayName ?? (string.IsNullOrWhiteSpace(SelectedModelId) ? "Auto" : SelectedModelId);
         }
     }
-    public string SelectedModelProviderLabel => SelectedModelProvider == "codex" ? "Codex" : "Antigravity";
+    public string SelectedModelProviderLabel => "Antigravity";
     public string AntigravitySandboxMode
     {
         get => AntigravityTerminalSandbox ? "enabled" : "disabled";
@@ -375,8 +352,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
             AntigravityToolPermission = NormalizeAntigravityToolPermission(value);
         }
     }
-    public bool IsCodexModelSelected => SelectedModelProvider == "codex";
-    public bool IsAntigravityModelSelected => !IsCodexModelSelected;
+    public bool IsAntigravityModelSelected => true;
 
     public event Action? SettingsRequested;
     public event Action? OpenPiWorkbenchRequested;
@@ -531,8 +507,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
             return;
         }
         if (string.IsNullOrWhiteSpace(text)) text = "请根据附加图片处理这个任务。";
-        var draftId = HasCodexDirective(text) ? _pendingCodexDraftId : null;
-        _pendingCodexDraftId = null;
         InputText = "";
         PendingImageAttachments.Clear();
         NotifyPendingImageAttachmentsChanged();
@@ -544,29 +518,21 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         SortConversationsByLastUserMessage();
         UserMessageSent?.Invoke();
         var executor = string.Equals(SelectedTaskExecutor, "default", StringComparison.OrdinalIgnoreCase) ? null : SelectedTaskExecutor;
-        var isCodexTurn = HasCodexDirective(text) || string.Equals(executor, "codex", StringComparison.OrdinalIgnoreCase);
         ResetManagerTypewriter();
         _streamingManager = null;
-        // A normal Antigravity message may be sent while Codex is running.
-        // Keep the live Codex entry so later deltas continue in the same
-        // bubble instead of splitting the task into a second transcript item.
-        IsBusy = !isCodexTurn;
-        ManagerStatus = isCodexTurn ? "Codex 任务正在启动" : $"{CurrentMainDisplayName} 正在协调";
+        IsBusy = true;
+        ManagerStatus = $"{CurrentMainDisplayName} 正在协调";
         Save();
-        // Reserve the manager reply's position before the asynchronous host
-        // request starts. Codex progress can arrive before Antigravity emits
-        // its first visible delta; without a placeholder that race inserts the
-        // Codex bubble above the manager bubble in the transcript.
-        // Explicit Codex turns have no manager reply, so they must not reserve
-        // an empty Antigravity bubble in the transcript.
-        if (!HasCodexDirective(text) && !string.Equals(executor, "codex", StringComparison.OrdinalIgnoreCase))
-            ReserveManagerBubble(conversation);
+        ReserveManagerBubble(conversation);
         try
         {
+            await _conversationWriter.FlushAsync();
+            if (_isShuttingDown) return;
             await EnsureSessionReadyAsync(conversation);
+            if (_isShuttingDown) return;
             var messageAttachments = storedAttachments.Select(attachment => new ManagerImageAttachmentMessage(
                 attachment.Path, attachment.DisplayName, attachment.MimeType, "image", attachment.AttachmentId, attachment.Order)).ToList();
-            await _pipe!.SendAsync(new SendManagerMessage(conversation.SessionId, text, messageAttachments, executor, draftId, generateTitle));
+            await _pipe!.SendAsync(new SendManagerMessage(conversation.SessionId, text, messageAttachments, executor, generateTitle));
         }
         catch (Exception exception) { AddSystemMessage($"无法发送：{exception.Message}"); IsBusy = false; ManagerStatus = "错误"; }
     }
@@ -607,8 +573,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 await _pipe.SendAsync(new DeleteManagerSessionMessage(
                     conversation.SessionId, conversation.WorkspacePath, BuildMainConfig(conversation, false), BuildCodingConfig(conversation, false),
                     conversation.CodingAgent?.Provider == "pi" ? conversation.CodingAgent.SessionRef : conversation.PiSessionFile,
-                    conversation.MainAgent?.Provider == "openai_compatible" ? conversation.MainAgent.SessionRef : null,
-                    conversation.CodingAgent?.Provider == "codex" ? conversation.CodingAgent.SessionRef : null));
+                    conversation.MainAgent?.Provider == "openai_compatible" ? conversation.MainAgent.SessionRef : null));
                 providerDeleteRequested = true;
                 await deletion.Task.WaitAsync(TimeSpan.FromSeconds(15));
                 _pendingSessionDeletions.Remove(conversation.SessionId);
@@ -640,11 +605,15 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         var mainCredential = conversation.MainAgent?.CredentialId;
         var codingCredential = conversation.CodingAgent?.CredentialId;
         TaskTraceStore.DeleteConversation(conversation.SessionId);
+        foreach (var message in conversation.Messages)
+            if (message.Runtime is not null) _activeRuntimes.Remove(message.Runtime);
         var index = Conversations.IndexOf(conversation); Conversations.Remove(conversation);
         if (Conversations.Count == 0) Conversations.Add(CreateConversation());
         if (ReferenceEquals(SelectedConversation, conversation)) SelectedConversation = Conversations[Math.Clamp(index, 0, Conversations.Count - 1)];
+        _sessionUiStates.Remove(conversation.SessionId);
         CleanupCredentialIfUnused(mainCredential); CleanupCredentialIfUnused(codingCredential);
         Save();
+        await _conversationWriter.FlushAsync();
     }
 
     [RelayCommand] private async Task ApproveAsync() => await SubmitApprovalAsync(true);
@@ -667,8 +636,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (approved && request.Kind == "mcp_url" && Uri.TryCreate(request.Url, UriKind.Absolute, out var uri))
             Process.Start(new ProcessStartInfo(uri.ToString()) { UseShellExecute = true });
         PendingApprovals.Remove(request); InteractionResponseText = ""; NotifyApprovalChanged();
-        if (request.Provider == "codex") await _pipe.SendAsync(new ResolveCodingInteractionMessage(request.SessionId, request.CallId, approved, values));
-        else await _pipe.SendAsync(new ApproveCodingToolMessage(request.SessionId, request.CallId, approved));
+        await _pipe.SendAsync(new ApproveCodingToolMessage(request.SessionId, request.CallId, approved));
     }
 
     [RelayCommand]
@@ -677,29 +645,11 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         StopManagerTypewriter();
         if (SelectedConversation is not null && _pipe is not null)
         {
-            var runtime = GetSessionUiState(SelectedConversation);
-            var target = runtime.IsBusy ? "antigravity" : runtime.CodexBusy ? "codex" : "all";
-            await _pipe.SendAsync(new CancelManagerTurnMessage(SelectedConversation.SessionId, target));
+            await _pipe.SendAsync(new CancelManagerTurnMessage(SelectedConversation.SessionId, "antigravity"));
         }
         IsBusy = false; ManagerStatus = "已取消";
-    }
-
-    [RelayCommand(CanExecute = nameof(CanVerifyLastCodexTask))]
-    private async Task VerifyLastCodexTaskAsync()
-    {
-        var conversation = SelectedConversation;
-        var taskId = LastCompletedCodexTaskId;
-        if (conversation is null || string.IsNullOrWhiteSpace(taskId)) return;
-        try
-        {
-            await EnsureSessionReadyAsync(conversation);
-            IsBusy = true; ManagerStatus = "正在启动 Antigravity 独立验证";
-            await _pipe!.SendAsync(new RequestVerificationMessage(conversation.SessionId, taskId));
-        }
-        catch (Exception exception)
-        {
-            AddSystemMessage($"无法启动验证：{exception.Message}"); IsBusy = false;
-        }
+        Save();
+        await _conversationWriter.FlushAsync();
     }
 
     [RelayCommand] private void OpenSettings() => SettingsRequested?.Invoke();
@@ -734,35 +684,9 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         info.ArgumentList.Add($"& '{escapedExecutable}'; Write-Host ''; & '{escapedExecutable}' models"); Process.Start(info);
     }
 
-    public void OpenCodexLoginTerminal()
-    {
-        var executable = string.IsNullOrWhiteSpace(CodexCliPath) ? "codex" : CodexCliPath;
-        var escaped = executable.Replace("'", "''");
-        var info = new ProcessStartInfo("powershell.exe") { UseShellExecute = true, WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
-        info.ArgumentList.Add("-NoExit"); info.ArgumentList.Add("-Command");
-        info.ArgumentList.Add($"& '{escaped}' login; Write-Host ''; & '{escaped}' login status"); Process.Start(info);
-    }
-
-    public async Task<ManagerHostEvent> ProbeCodexAsync(string executable)
-    {
-        var conversation = SelectedConversation ?? throw new InvalidOperationException("没有活动会话。");
-        await EnsureSessionReadyAsync(conversation);
-        _codexProbeCompletion = new TaskCompletionSource<ManagerHostEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await _pipe!.SendAsync(new ProbeCodexMessage(conversation.SessionId, executable, conversation.WorkspacePath));
-        return await _codexProbeCompletion.Task.WaitAsync(TimeSpan.FromSeconds(30));
-    }
-
-    public async Task<ManagerHostEvent> StartCodexLoginAsync(string executable)
-    {
-        var conversation = SelectedConversation ?? throw new InvalidOperationException("没有活动会话。");
-        await EnsureSessionReadyAsync(conversation);
-        _codexLoginCompletion = new TaskCompletionSource<ManagerHostEvent>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await _pipe!.SendAsync(new StartCodexLoginMessage(conversation.SessionId, executable, conversation.WorkspacePath));
-        return await _codexLoginCompletion.Task.WaitAsync(TimeSpan.FromSeconds(30));
-    }
-
     private async Task EnsureHostAsync()
     {
+        if (_isShuttingDown) throw new OperationCanceledException("Manager 正在关闭。");
         if (_pipe is not null) return;
 
         Task startTask;
@@ -795,6 +719,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         try
         {
             var pipe = await host.StartAsync();
+            if (_isShuttingDown) throw new OperationCanceledException("Manager 正在关闭。");
             pipe.EventReceived += OnHostEvent;
             pipe.TransportError += OnTransportError;
             _host = host;
@@ -938,15 +863,14 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         state.ManagerInputBubble = _managerInputBubble;
         state.PendingCodingText = _pendingCodingText;
         state.ActiveCodingTaskId = _activeCodingTaskId;
-        state.PendingCodexDraftId = _pendingCodexDraftId;
-        state.CodexBusy = state.CodexBusy || _activeCodingTaskId is not null;
+        state.CodingBusy = state.CodingBusy || _activeCodingTaskId is not null;
         state.Activities.Clear();
         state.Activities.AddRange(Activities);
         state.PendingApprovals.Clear();
         state.PendingApprovals.AddRange(PendingApprovals);
     }
 
-    private void RestoreSessionUiState(ManagerConversationItem? conversation)
+    internal void RestoreSessionUiState(ManagerConversationItem? conversation)
     {
         _managerTypewriterTimer?.Stop();
         _codingTextTimer?.Stop();
@@ -958,7 +882,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         _streamingManagerStatus = null;
         _streamingManagerStatusConversation = null;
         _activeCodingTaskId = null;
-        _pendingCodexDraftId = null;
         Activities.Clear();
         PendingApprovals.Clear();
 
@@ -982,7 +905,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         _managerInputBubble = state.ManagerInputBubble;
         _pendingCodingText = state.PendingCodingText;
         _activeCodingTaskId = state.ActiveCodingTaskId;
-        _pendingCodexDraftId = state.PendingCodexDraftId;
         foreach (var activity in state.Activities) Activities.Add(activity);
         foreach (var approval in state.PendingApprovals) PendingApprovals.Add(approval);
         NotifyApprovalChanged();
@@ -991,18 +913,18 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (_pendingCodingText.Length > 0) EnsureCodingTextTimerStarted();
     }
 
-    private void ReplayBufferedEvents(ManagerConversationItem conversation)
+    internal void ReplayBufferedEvents(ManagerConversationItem conversation)
     {
         var state = GetSessionUiState(conversation);
         if (state.BufferedEvents.Count == 0) return;
-        var events = state.BufferedEvents.ToList();
-        state.BufferedEvents.Clear();
+        var events = state.BufferedEvents.Drain();
         _replayingBackgroundEvents = true;
         try
         {
             foreach (var message in events) HandleHostEvent(message);
         }
         finally { _replayingBackgroundEvents = false; }
+        Save();
     }
 
     private void SyncSessionUiState(ManagerConversationItem conversation)
@@ -1018,47 +940,24 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         state.ManagerInputBubble = _managerInputBubble;
         state.PendingCodingText = _pendingCodingText;
         state.ActiveCodingTaskId = _activeCodingTaskId;
-        state.PendingCodexDraftId = _pendingCodexDraftId;
         state.Activities.Clear();
         state.Activities.AddRange(Activities);
         state.PendingApprovals.Clear();
         state.PendingApprovals.AddRange(PendingApprovals);
-        if (_activeCodingTaskId is not null) state.CodexBusy = true;
-        EnsureTaskDurationTimer();
+        if (_activeCodingTaskId is not null) state.CodingBusy = true;
         OnPropertyChanged(nameof(CanCancel));
     }
 
     private void EnsureTaskDurationTimer()
     {
-        if (_taskDurationTimer is null) return;
+        if (_taskDurationTimer is null || _activeRuntimes.Count == 0 || _isShuttingDown) return;
         if (!_taskDurationTimer.IsEnabled) _taskDurationTimer.Start();
     }
 
     private void RefreshTaskDurations()
     {
-        var runtimes = new HashSet<TaskRuntimeInfo>();
-        foreach (var conversation in Conversations)
-        {
-            foreach (var message in conversation.Messages)
-                if (message.Runtime is not null) runtimes.Add(message.Runtime);
-            if (_sessionUiStates.TryGetValue(conversation.SessionId, out var state))
-            {
-                if (state.StreamingManager?.Runtime is not null) runtimes.Add(state.StreamingManager.Runtime);
-                if (state.StreamingCoding?.Runtime is not null) runtimes.Add(state.StreamingCoding.Runtime);
-                if (state.StreamingManagerStatus?.Runtime is not null) runtimes.Add(state.StreamingManagerStatus.Runtime);
-                foreach (var activity in state.Activities)
-                    if (activity.Runtime is not null) runtimes.Add(activity.Runtime);
-            }
-        }
-        foreach (var activity in Activities)
-            if (activity.Runtime is not null) runtimes.Add(activity.Runtime);
-        var active = false;
-        foreach (var runtime in runtimes)
-        {
-            runtime.RefreshElapsed();
-            active |= runtime.IsActive;
-        }
-        if (!active) _taskDurationTimer?.Stop();
+        _activeRuntimes.Refresh();
+        if (_activeRuntimes.Count == 0) _taskDurationTimer?.Stop();
     }
 
     private void ApplyManagerTaskTiming(ManagerHostEvent message)
@@ -1082,6 +981,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         else
         {
             entry.Runtime.Mark(message.State ?? "responding");
+            _activeRuntimes.Track(entry.Runtime);
             EnsureTaskDurationTimer();
         }
     }
@@ -1103,6 +1003,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         else
         {
             target.Runtime.Mark(runtimeState);
+            _activeRuntimes.Track(target.Runtime);
             EnsureTaskDurationTimer();
         }
     }
@@ -1137,7 +1038,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 };
                 break;
             case "delegation_started":
-                state.CodexBusy = true;
+                state.CodingBusy = true;
                 state.ActiveCodingTaskId = message.TaskId;
                 break;
             case "coding_delta":
@@ -1145,15 +1046,15 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
             case "coding_tool_started":
             case "coding_tool_output":
             case "coding_tool_completed":
-                state.CodexBusy = true;
+                state.CodingBusy = true;
                 state.ActiveCodingTaskId ??= message.TaskId;
                 break;
             case "coding_completed":
-                state.CodexBusy = false;
+                state.CodingBusy = false;
                 state.ActiveCodingTaskId = null;
                 break;
             case "provider_status" when message.Layer == "coding":
-                state.CodexBusy = message.Policy is "queued" or "running" or "awaiting_user_input";
+                state.CodingBusy = message.Policy is "queued" or "running" or "awaiting_user_input";
                 break;
             case "manager_completed":
                 state.IsBusy = false;
@@ -1162,12 +1063,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 conversation.Title = message.Title.Trim();
                 break;
             case "manager_error":
-                if (string.Equals(message.Provider, "codex", StringComparison.Ordinal))
-                {
-                    state.CodexBusy = false;
-                    state.ActiveCodingTaskId = null;
-                }
-                else state.IsBusy = false;
+                state.IsBusy = false;
                 break;
         }
     }
@@ -1199,9 +1095,12 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private void OnHostEvent(object? sender, ManagerHostEvent message) => System.Windows.Application.Current.Dispatcher.Invoke(() => HandleHostEvent(message));
+    private void OnHostEvent(object? sender, ManagerHostEvent message) => System.Windows.Application.Current.Dispatcher.Invoke(() =>
+    {
+        if (!_isShuttingDown) HandleHostEvent(message);
+    });
 
-    private void HandleHostEvent(ManagerHostEvent message)
+    internal void HandleHostEvent(ManagerHostEvent message)
     {
         if (message.Type == "manager_host_ready")
         {
@@ -1243,7 +1142,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (!ReferenceEquals(conversation, SelectedConversation) && !_replayingBackgroundEvents)
         {
             RecordBackgroundEvent(conversation, message);
-            Save();
+            if (!IsStreamingEvent(message)) Save();
             return;
         }
         switch (message.Type)
@@ -1282,10 +1181,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 break;
             case "agent_models":
                 ReplaceAgentModels(message.Provider ?? "", message.Models);
-                if (message.Provider == "codex")
-                    CodingProviderStatusDetail = message.Authenticated == true
-                        ? $"Codex 已登录 · {message.Models?.Count ?? 0} 个可用模型"
-                        : message.Message ?? "Codex CLI 可用，但尚未登录";
                 break;
             case "manager_state":
                 ManagerStatus = StateLabel(message.State);
@@ -1320,42 +1215,9 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 ManagerCacheReadTokens = message.CacheReadTokens ?? message.AntigravityCacheReadTokens;
                 ManagerContextTokens = message.ContextTokens; ManagerContextWindow = message.ContextWindow;
                 break;
-            case "codex_prompt_draft":
-                if (string.IsNullOrWhiteSpace(message.DraftId) || string.IsNullOrWhiteSpace(message.Text)) break;
-                _pendingCodexDraftId = message.DraftId;
-                InputText = $"@codex {message.Text}".TrimEnd();
-                // ManagerHost has already validated the draft against the
-                // active session/workspace and will validate draftId again on
-                // submission. Do not block prefill on a second UI-side string
-                // comparison: persisted paths can differ in casing, trailing
-                // separators, or be stale while a conversation is switching.
-                var draftWorkspace = message.WorkspacePath?.Trim();
-                var conversationWorkspace = conversation.WorkspacePath?.Trim();
-                var sameWorkspace = !string.IsNullOrWhiteSpace(draftWorkspace) && !string.IsNullOrWhiteSpace(conversationWorkspace) &&
-                    AreEquivalentWorkspacePaths(draftWorkspace, conversationWorkspace);
-                ManagerStatus = sameWorkspace || string.IsNullOrWhiteSpace(conversationWorkspace)
-                    ? "Codex 草稿已载入输入框，请检查后发送"
-                    : "Codex 草稿已载入输入框，请检查工作区后发送";
-                break;
-            case "codex_account_status":
-                CodingProviderStatusDetail = message.Authenticated == true
-                    ? $"Codex 已登录 · {message.Models?.Count ?? 0} 个可用模型"
-                    : "Codex CLI 可用，但尚未登录";
-                ReplaceAgentModels("codex", message.Models);
-                _codexProbeCompletion?.TrySetResult(message); _codexProbeCompletion = null;
-                break;
-            case "codex_login_started":
-                if (Uri.TryCreate(message.Url, UriKind.Absolute, out var loginUri))
-                    Process.Start(new ProcessStartInfo(loginUri.ToString()) { UseShellExecute = true });
-                CodingProviderStatusDetail = "已在浏览器中打开 Codex 登录，请完成授权。";
-                _codexLoginCompletion?.TrySetResult(message); _codexLoginCompletion = null;
-                break;
-            case "codex_login_completed":
-                CodingProviderStatusDetail = message.Ok == true ? "Codex 登录完成" : $"Codex 登录失败：{message.Message}";
-                break;
             case "delegation_started":
                 _activeCodingTaskId = message.TaskId;
-                GetSessionUiState(conversation).CodexBusy = true;
+                GetSessionUiState(conversation).CodingBusy = true;
                 OnPropertyChanged(nameof(CanCancel));
                 var executorName = ExecutorDisplayName(message.Provider ?? conversation.CodingAgent?.Provider ?? "pi");
                 var delegationActivity = new ManagerActivity("delegate", $"委派给 {executorName} Coding Agent", "进行中");
@@ -1366,7 +1228,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 Activities.Add(delegationActivity);
                 break;
             case "coding_delta":
-                GetSessionUiState(conversation).CodexBusy = true;
+                GetSessionUiState(conversation).CodingBusy = true;
                 _activeCodingTaskId ??= message.TaskId;
                 _streamingCoding ??= AddEntry(CodingBubbleRole(message), CodingBubbleSource(message), "");
                 _streamingCoding.TaskId ??= message.TaskId;
@@ -1377,7 +1239,8 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 QueueCodingBubbleText(message, message.Text ?? "");
                 break;
             case "coding_thinking_delta":
-                GetSessionUiState(conversation).CodexBusy = true;
+                FlushCodingText();
+                GetSessionUiState(conversation).CodingBusy = true;
                 _activeCodingTaskId ??= message.TaskId;
                 // Manager conversations use the same inline thinking surface as
                 // the original Pi workbench. Keep the right-side activity row
@@ -1397,18 +1260,18 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
             case "coding_interaction_request":
                 var interactionDetails = ComposeApprovalDetails(message.Details, message.Command, message.WorkingDirectory);
                 EnsureCodingOperation(message.Kind ?? "工具", "等待确认", message.RequestId, message.Command, interactionDetails, message.Diff, message.Provider);
-                AddApproval(new ApprovalRequest(conversation.SessionId, message.RequestId ?? "", message.Kind ?? "codex", message.Title ?? "Codex 等待确认", interactionDetails, message.Diff, message.Provider ?? "codex", message.Kind ?? "command_approval", JsonElementText(message.Fields), message.Url));
+                AddApproval(new ApprovalRequest(conversation.SessionId, message.RequestId ?? "", message.Kind ?? "工具", message.Title ?? "等待确认", interactionDetails, message.Diff, message.Provider ?? "antigravity", message.Kind ?? "command_approval", JsonElementText(message.Fields), message.Url));
                 break;
             case "coding_interaction_completed":
                 RemoveApproval(message.RequestId); break;
             case "coding_tool_started":
-                GetSessionUiState(conversation).CodexBusy = true;
+                GetSessionUiState(conversation).CodingBusy = true;
                 _activeCodingTaskId ??= message.TaskId;
                 EnsureCodingOperation(message.Tool ?? "工具", "进行中", message.CallId, message.Command, message.Details, null, message.Source ?? message.Provider);
                 Activities.Add(new ManagerActivity("tool", message.Tool ?? "工具", "进行中", message.CallId) { Details = message.Command ?? "" });
                 break;
             case "coding_tool_output":
-                GetSessionUiState(conversation).CodexBusy = true;
+                GetSessionUiState(conversation).CodingBusy = true;
                 _activeCodingTaskId ??= message.TaskId;
                 var outputActivity = Activities.LastOrDefault(item => item.CallId == message.CallId);
                 if (outputActivity is not null) outputActivity.Details += message.Text;
@@ -1425,7 +1288,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 }
                 break;
             case "coding_tool_completed":
-                GetSessionUiState(conversation).CodexBusy = true;
+                GetSessionUiState(conversation).CodingBusy = true;
                 _activeCodingTaskId ??= message.TaskId;
                 foreach (var activity in Activities.Where(item => item.CallId == message.CallId)) activity.Status = message.Ok == true ? (message.AutoApproved == true ? "自动完成" : "完成") : "失败";
                 var completedOperation = _streamingCoding?.FindOperation(message.CallId);
@@ -1443,7 +1306,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 }
                 RemoveApproval(message.CallId); break;
             case "coding_completed":
-                // Codex observation mode returns ordinary text rather than a
+                // Compatibility messages can return ordinary text rather than a
                 // CodeResult. Finish the same single bubble used for deltas,
                 // append only a non-duplicated terminal suffix, and close any
                 // still-running activity rows.
@@ -1458,13 +1321,13 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 // suffix; retain a small UI-side guard for older hosts or a
                 // stale ManagerHost binary that might still send the full text.
                 if (!string.IsNullOrWhiteSpace(message.Text) &&
-                    !IsDuplicateCodexCompletion(_streamingCoding.Text, message.Text))
+                    !IsDuplicateCodingCompletion(_streamingCoding.Text, message.Text))
                     QueueCodingBubbleText(message, message.Text);
                 CompleteStreamingCodingText();
                 foreach (var item in Activities.Where(item => item.Status == "进行中"))
                     item.Status = message.Status is "failed" ? "失败" : message.Status is "cancelled" ? "已取消" : message.Status is "partial" ? "部分完成" : "完成";
                 Activities.Add(new ManagerActivity("result", $"{CodingBubbleName(message)} 任务结束", message.Status is "completed" ? "完成" : message.Status is "cancelled" ? "已取消" : message.Status is "partial" ? "部分完成" : "失败") { Details = message.Text ?? "", Runtime = _streamingCoding.Runtime });
-                _streamingCoding = null; _activeCodingTaskId = null; GetSessionUiState(conversation).CodexBusy = false; PendingApprovals.Clear(); NotifyApprovalChanged(); OnPropertyChanged(nameof(CanCancel)); OnPropertyChanged(nameof(CanVerifyLastCodexTask)); VerifyLastCodexTaskCommand.NotifyCanExecuteChanged(); break;
+                _streamingCoding = null; _activeCodingTaskId = null; GetSessionUiState(conversation).CodingBusy = false; PendingApprovals.Clear(); NotifyApprovalChanged(); OnPropertyChanged(nameof(CanCancel)); break;
             case "code_result":
                 _streamingCoding ??= AddEntry($"{CurrentCodingDisplayName} Coding Agent", conversation.CodingAgent?.Provider ?? "pi", "");
                 _streamingCoding.TaskId = message.TaskId ?? _activeCodingTaskId;
@@ -1472,7 +1335,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 FlushCodingText();
                 _streamingCoding.CodeResult = message.Result;
                 // Keep compatibility with transcripts produced before the
-                // Codex bridge filtered structured output from assistant text.
+                // Older hosts filtered structured output from assistant text.
                 // Those entries contain one or more CodeResult JSON objects;
                 // render the user-facing summary instead, just like Pi.
                 if (message.Result is not null && LooksLikeCodeResultJson(_streamingCoding.Text))
@@ -1487,9 +1350,9 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 }
                 _streamingCoding.Runtime?.Mark("completed", DateTimeOffset.UtcNow);
                 CompleteStreamingCodingText();
-                _streamingCoding = null; _activeCodingTaskId = null; GetSessionUiState(conversation).CodexBusy = false; PendingApprovals.Clear(); NotifyApprovalChanged(); OnPropertyChanged(nameof(CanCancel)); OnPropertyChanged(nameof(CanVerifyLastCodexTask)); VerifyLastCodexTaskCommand.NotifyCanExecuteChanged(); break;
+                _streamingCoding = null; _activeCodingTaskId = null; GetSessionUiState(conversation).CodingBusy = false; PendingApprovals.Clear(); NotifyApprovalChanged(); OnPropertyChanged(nameof(CanCancel)); break;
             case "verification_started":
-                Activities.Add(new ManagerActivity("verification", "Antigravity 正在独立验证 Codex 结果", "进行中"));
+                Activities.Add(new ManagerActivity("verification", "Antigravity 正在独立验证编码结果", "进行中"));
                 _streamingCoding = AddEntry("Antigravity 验证", "antigravity", "");
                 _streamingCoding.TaskId = message.TaskId;
                 break;
@@ -1504,49 +1367,28 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                     foreach (var validation in verification.Validation) Activities.Add(new ManagerActivity("validation", validation.Command, validation.Status == "passed" ? "通过" : validation.Status == "failed" ? "失败" : "跳过") { Details = validation.Summary });
                 _streamingCoding.Runtime?.Mark("completed", DateTimeOffset.UtcNow);
                 CompleteStreamingCodingText();
-                _streamingCoding = null; OnPropertyChanged(nameof(CanVerifyLastCodexTask)); VerifyLastCodexTaskCommand.NotifyCanExecuteChanged(); break;
+                _streamingCoding = null; break;
             case "task_trace":
                 if (message.TraceEvent is not null) TaskTraceStore.Append(conversation.SessionId, message.TraceEvent);
                 break;
             case "manager_error":
-                if (!string.Equals(message.Provider, "codex", StringComparison.Ordinal))
-                {
-                    StopManagerTypewriter();
-                }
-                if (string.Equals(message.Provider, "codex", StringComparison.Ordinal) && _streamingCoding is not null)
-                {
-                    FlushCodingText();
-                    CompleteStreamingCodingText();
-                    _streamingCoding.CompleteThinking();
-                    _streamingCoding = null;
-                }
-                if (string.Equals(message.Provider, "codex", StringComparison.Ordinal))
-                {
-                    GetSessionUiState(conversation).CodexBusy = false;
-                    _activeCodingTaskId = null;
-                    OnPropertyChanged(nameof(CanCancel));
-                }
-                if (message.Code?.StartsWith("CODEX_", StringComparison.Ordinal) == true)
-                {
-                    var exception = new InvalidOperationException($"{message.Code}: {message.Message}");
-                    _codexProbeCompletion?.TrySetException(exception); _codexProbeCompletion = null;
-                    _codexLoginCompletion?.TrySetException(exception); _codexLoginCompletion = null;
-                }
+                StopManagerTypewriter();
                 AddSystemMessage($"{message.Code}: {message.Message}");
-                if (!string.Equals(message.Provider, "codex", StringComparison.Ordinal))
-                {
-                    IsBusy = false;
-                    ManagerStatus = "错误";
-                }
+                IsBusy = false;
+                ManagerStatus = "错误";
                 break;
         }
         // Persist completed turns and state changes, but do not synchronously
         // rewrite the full transcript for every streamed text delta. The
         // in-memory entry remains live so the UI can resize on each delta.
-        if (message.Type is not ("manager_delta" or "manager_thinking_delta" or "manager_tool_status" or "coding_delta" or "coding_thinking_delta" or "coding_tool_output")) Save();
+        if (!_replayingBackgroundEvents && !IsStreamingEvent(message)) Save();
         SyncSessionUiState(conversation);
         NotifyCurrentProviderChanged();
     }
+
+    private static bool IsStreamingEvent(ManagerHostEvent message) => message.Type is
+        "manager_delta" or "manager_thinking_delta" or "manager_tool_status" or
+        "coding_delta" or "coding_thinking_delta" or "coding_tool_output";
 
     private async Task StartSessionAfterActivationMissAsync(ManagerConversationItem conversation)
     {
@@ -1556,6 +1398,9 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
 
     private ProcessItem? EnsureCodingOperation(string title, string status, string? callId, string? command, string? details, string? diff, string? source = null)
     {
+        // Text queued before a tool event belongs before that operation even
+        // when no 33 ms tick has occurred (including background/exit replay).
+        FlushCodingText();
         _streamingCoding ??= AddEntry(CodingBubbleRole(source), CodingBubbleSource(source), "");
         // A worker can move directly from reasoning to a tool call without an
         // assistant text delta. Close the preceding thought in that case so a
@@ -1597,7 +1442,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     private string CodingBubbleSource(ManagerHostEvent message) => CodingBubbleSource(message.Source ?? message.Provider);
 
     private string CodingBubbleSource(string? source) => string.IsNullOrWhiteSpace(source)
-        ? SelectedConversation?.CodingAgent?.Provider ?? "pi"
+        ? EventConversation?.CodingAgent?.Provider ?? "pi"
         : source;
 
     /// <summary>
@@ -1614,7 +1459,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         const int maxBubbleLength = 48_000;
         var remaining = maxBubbleLength - _streamingCoding.Text.Length - _pendingCodingText.Length;
         if (remaining <= 0) return;
-        const string truncationMarker = "\n…（Codex 输出已截断）";
+        const string truncationMarker = "\n…（编码输出已截断）";
         if (text.Length > remaining)
             text = remaining <= truncationMarker.Length ? truncationMarker[..remaining] : text[..(remaining - truncationMarker.Length)] + truncationMarker;
         _streamingCoding.IsStreamingText = true;
@@ -1624,6 +1469,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
 
     private void EnsureCodingTextTimerStarted()
     {
+        if (_isShuttingDown) return;
         if (_pendingCodingText.Length == 0 || _streamingCoding is null) return;
         _codingTextTimer ??= CreateCodingTextTimer();
         if (!_codingTextTimer.IsEnabled) _codingTextTimer.Start();
@@ -1683,11 +1529,11 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (_streamingCoding is not null) _streamingCoding.IsStreamingText = false;
     }
 
-    private static bool IsDuplicateCodexCompletion(string existing, string incoming)
+    private static bool IsDuplicateCodingCompletion(string existing, string incoming)
     {
         if (string.IsNullOrWhiteSpace(existing) || string.IsNullOrWhiteSpace(incoming)) return false;
-        var current = CompactCodexText(existing);
-        var candidate = CompactCodexText(incoming);
+        var current = CompactCodingText(existing);
+        var candidate = CompactCodingText(incoming);
         if (current.Length == 0 || candidate.Length == 0) return false;
         if (string.Equals(current, candidate, StringComparison.Ordinal)) return true;
         // A stale host can send the whole final answer after it was streamed.
@@ -1696,7 +1542,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         return candidate.Length >= 48 && (current.Contains(candidate, StringComparison.Ordinal) || candidate.Contains(current, StringComparison.Ordinal));
     }
 
-    private static string CompactCodexText(string value) => Regex.Replace(value, @"\s+", "").Trim();
+    private static string CompactCodingText(string value) => Regex.Replace(value, @"\s+", "").Trim();
 
     private static string AppendBounded(string current, string chunk)
     {
@@ -1722,7 +1568,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(commandText) && !lines.Any(line => line.Contains(commandText, StringComparison.Ordinal))) lines.Add(commandText);
         var cwdText = workingDirectory?.Trim() ?? "";
         if (!string.IsNullOrWhiteSpace(cwdText) && !lines.Any(line => line.Contains(cwdText, StringComparison.Ordinal))) lines.Add($"工作目录：{cwdText}");
-        return lines.Count > 0 ? string.Join(Environment.NewLine, lines) : "请确认 Codex 请求的具体操作。";
+        return lines.Count > 0 ? string.Join(Environment.NewLine, lines) : "请确认编码请求的具体操作。";
     }
 
     private static bool IsPlaceholderApprovalDetails(string value) =>
@@ -1769,21 +1615,17 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     private ManagerCodingAgentConfig BuildCodingConfig(ManagerConversationItem conversation, bool includeSecret)
     {
         var binding = conversation.CodingAgent ?? throw new InvalidOperationException("对话缺少 Coding Agent 配置。");
-        var isAntigravity = string.Equals(binding.Provider, "antigravity", StringComparison.OrdinalIgnoreCase);
-        var isCodex = string.Equals(binding.Provider, "codex", StringComparison.OrdinalIgnoreCase);
+        var isAntigravity = !string.Equals(binding.Provider, "pi", StringComparison.OrdinalIgnoreCase);
         return new ManagerCodingAgentConfig
         {
-            Provider = binding.Provider,
-            Executable = isAntigravity ? AntigravityCliPath : isCodex ? CodexCliPath : binding.CliPath,
-            ThreadId = isCodex ? binding.SessionRef : null,
-            Model = isAntigravity ? AntigravityModel : isCodex ? CodexModel : binding.Model,
-            Effort = isAntigravity ? AntigravityEffort : isCodex ? CodexEffort : binding.Effort,
+            Provider = isAntigravity ? "antigravity" : "pi",
+            Executable = isAntigravity ? AntigravityCliPath : binding.CliPath,
+            Model = isAntigravity ? AntigravityModel : binding.Model,
+            Effort = isAntigravity ? AntigravityEffort : binding.Effort,
             BaseUrl = binding.BaseUrl, ModelId = binding.ModelId,
-            ApprovalPolicy = isCodex ? NormalizeCodexApprovalPolicy(CodexApprovalPolicy) : null,
-            SandboxMode = isCodex ? NormalizeCodexSandboxMode(CodexSandboxMode) : null,
-            ApiKey = includeSecret && binding.Provider == "pi" ? CredentialStore.Read(binding.CredentialId) ?? CredentialStore.Read(LegacyPiCredentialTarget) : null,
-            SessionFile = binding.Provider == "pi" ? binding.SessionRef : null,
-            ConversationId = binding.Provider == "antigravity" ? binding.SessionRef : null,
+            ApiKey = includeSecret && !isAntigravity ? CredentialStore.Read(binding.CredentialId) ?? CredentialStore.Read(LegacyPiCredentialTarget) : null,
+            SessionFile = isAntigravity ? null : binding.SessionRef,
+            ConversationId = isAntigravity ? binding.SessionRef : null,
             ExecutionPolicy = isAntigravity ? AntigravityExecutionPolicy : null,
             AutoApproveSafeCommands = binding.AutoApproveSafeCommands, AutoApproveGitOperations = binding.AutoApproveGitOperations
         };
@@ -1799,7 +1641,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 ApiKey = includeSecret ? CredentialStore.Read(PiCredentialId) ?? CredentialStore.Read(LegacyPiCredentialTarget) : null,
                 AutoApproveSafeCommands = AutoApproveSafeCommands, AutoApproveGitOperations = AutoApproveGitOperations,
             },
-            ["codex"] = new ManagerCodingAgentConfig { Provider = "codex", Executable = CodexCliPath, Model = CodexModel, Effort = CodexEffort, ApprovalPolicy = NormalizeCodexApprovalPolicy(CodexApprovalPolicy), SandboxMode = NormalizeCodexSandboxMode(CodexSandboxMode) },
             ["antigravity"] = new ManagerCodingAgentConfig
             {
                 Provider = "antigravity", Executable = AntigravityCliPath, Model = AntigravityModel,
@@ -1808,14 +1649,15 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 // MainAgent payload is the one used by current ManagerHost.
             },
         };
-        profiles[conversation.CodingAgent!.Provider] = BuildCodingConfig(conversation, includeSecret);
+        var activeProfile = BuildCodingConfig(conversation, includeSecret);
+        profiles[activeProfile.Provider] = activeProfile;
         return profiles;
     }
 
     private ManagerChatEntry AddEntry(string role, string source, string text)
     {
         var entry = new ManagerChatEntry(role, source, text);
-        if (SelectedConversation is not null) AppendMessage(SelectedConversation, entry);
+        if (EventConversation is not null) AppendMessage(EventConversation, entry);
         return entry;
     }
 
@@ -1863,14 +1705,14 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
 
     private ManagerChatEntry GetOrCreateTransientManagerStatus(string role, string source)
     {
-        if (_streamingManagerStatus is not null && ReferenceEquals(_streamingManagerStatusConversation, SelectedConversation))
+        if (_streamingManagerStatus is not null && ReferenceEquals(_streamingManagerStatusConversation, EventConversation))
             return _streamingManagerStatus;
 
         ClearTransientManagerStatus();
         var entry = new ManagerChatEntry(role, source, "", isTransientStatus: true);
-        AppendMessage(SelectedConversation!, entry);
+        AppendMessage(EventConversation!, entry);
         _streamingManagerStatus = entry;
-        _streamingManagerStatusConversation = SelectedConversation;
+        _streamingManagerStatusConversation = EventConversation;
         return entry;
     }
 
@@ -1879,7 +1721,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (_managerInputBubble is null) return;
         // Keep the empty placeholder reserved at turn start. A reasoning/tool
         // status can arrive before the manager's first visible text; removing
-        // that placeholder here would let an asynchronous Codex bubble claim
+        // that placeholder here would let an asynchronous coding bubble claim
         // its position and put the later manager reply below it again.
         if (_managerInputBubble.Entry is not null && !_managerInputBubble.HasText && !_managerInputBubble.IsComplete)
             return;
@@ -1940,6 +1782,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
 
     private void EnsureManagerTypewriterStarted()
     {
+        if (_isShuttingDown) return;
         if (_managerBubbles.Count == 0) return;
         _managerTypewriterTimer ??= CreateManagerTypewriterTimer();
         RenderManagerTypewriterTick();
@@ -2019,16 +1862,34 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
             bubble.Entry.CompleteThinking();
             bubble.Entry.IsStreamingText = false;
             if (string.IsNullOrWhiteSpace(bubble.Entry.Text) && !bubble.Entry.HasThinking && bubble.Entry.Runtime is null)
-                if (SelectedConversation is not null) RemoveMessage(SelectedConversation, bubble.Entry);
+                if (EventConversation is not null) RemoveMessage(EventConversation, bubble.Entry);
         }
 
         if (ReferenceEquals(_streamingManager, bubble.Entry)) _streamingManager = null;
         if (bubble.IsFinal && !string.Equals(bubble.CompletionAction, "delegate_code", StringComparison.Ordinal)) IsBusy = false;
+        Save();
+    }
+
+    private void FlushManagerText()
+    {
+        while (_managerBubbles.Count > 0)
+        {
+            var bubble = _managerBubbles.Dequeue();
+            if (bubble.PendingText.Length > 0)
+            {
+                bubble.Entry ??= AddEntry(bubble.Role, bubble.Source, "");
+                bubble.Entry.Append(bubble.PendingText.ToString());
+                bubble.PendingText.Clear();
+            }
+            if (bubble.IsComplete) CompleteManagerBubble(bubble);
+            else if (bubble.Entry is not null) bubble.Entry.IsStreamingText = false;
+        }
     }
 
     private void StopManagerTypewriter()
     {
         _managerTypewriterTimer?.Stop();
+        FlushManagerText();
         _managerBubbles.Clear();
         _managerInputBubble = null;
         ClearTransientManagerStatus();
@@ -2041,17 +1902,18 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
             _streamingManager.CompleteThinking();
             _streamingManager.IsStreamingText = false;
             if (string.IsNullOrWhiteSpace(_streamingManager.Text) && !_streamingManager.HasThinking && !preserveTaskEntry)
-                if (SelectedConversation is not null) RemoveMessage(SelectedConversation, _streamingManager);
+                if (EventConversation is not null) RemoveMessage(EventConversation, _streamingManager);
             if (!preserveTaskEntry) _streamingManager = null;
         }
     }
 
     private void ResetManagerTypewriter() => StopManagerTypewriter();
 
-    private void AddSystemMessage(string text) => AddSystemMessage(SelectedConversation, text);
+    private void AddSystemMessage(string text) => AddSystemMessage(EventConversation, text);
 
     private void AddSystemMessage(ManagerConversationItem? conversation, string text)
     {
+        if (_isShuttingDown && _shutdownConversation is null) return;
         if (conversation is not null)
         {
             AppendMessage(conversation, new ManagerChatEntry("IlMatto", "system", text));
@@ -2088,7 +1950,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         return text.StartsWith("{", StringComparison.Ordinal) &&
                (text.Contains("\"summaryForUser\"", StringComparison.Ordinal) || text.Contains("\"status\"", StringComparison.Ordinal));
     }
-    private static bool HasCodexDirective(string text) => Regex.IsMatch(text, @"^\s*@codex(?:\s+|:)", RegexOptions.IgnoreCase);
     private static bool AreEquivalentWorkspacePaths(string left, string right)
     {
         try
@@ -2106,19 +1967,16 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     private void NotifyCurrentProviderChanged()
     {
         OnPropertyChanged(nameof(WorkspaceLabel)); OnPropertyChanged(nameof(CurrentCompanionName)); OnPropertyChanged(nameof(CurrentCompanionTitle)); OnPropertyChanged(nameof(CurrentMainDisplayName)); OnPropertyChanged(nameof(CurrentCodingDisplayName));
-        OnPropertyChanged(nameof(IsCodexCodingAgent));
-        OnPropertyChanged(nameof(CanVerifyLastCodexTask));
-        VerifyLastCodexTaskCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(CurrentProviderLabel)); OnPropertyChanged(nameof(MainConnectionLabel)); OnPropertyChanged(nameof(ManagerCacheLabel)); OnPropertyChanged(nameof(ManagerContextLabel));
     }
 
-    private void ReplaceAgentModels(string provider, IReadOnlyList<CodexModelInfo>? models)
+    private void ReplaceAgentModels(string provider, IReadOnlyList<AgentModelInfo>? models)
     {
         var group = AgentModelGroups.FirstOrDefault(item => item.Provider == provider);
         if (group is null) return;
         var choices = new List<AgentModelChoice>
         {
-            new(provider, "", "Auto", provider == "codex" ? "使用 Codex 默认模型。" : "使用 Antigravity 默认模型。"),
+            new(provider, "", "Auto", "使用 Antigravity 默认模型。"),
         };
 
         if (provider == "antigravity")
@@ -2223,13 +2081,10 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
             await EnsureSessionReadyAsync(SelectedConversation);
             if (_pipe is null) return;
             await _pipe.SendAsync(new ListAgentModelsMessage(SelectedConversation.SessionId, "antigravity"));
-            await _pipe.SendAsync(new ListAgentModelsMessage(SelectedConversation.SessionId, "codex"));
         }
         catch (Exception exception)
         {
-            // A missing optional Codex installation must not make the normal
-            // Antigravity conversation unavailable.
-            CodingProviderStatusDetail = $"Codex 模型列表不可用：{exception.Message}";
+            MainProviderStatusDetail = $"Antigravity 模型列表不可用：{exception.Message}";
         }
         finally { _modelRefreshInFlight = false; }
     }
@@ -2237,24 +2092,15 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand]
     private void SelectModel(AgentModelChoice? choice)
     {
-        if (choice is null || (choice.Provider != "antigravity" && choice.Provider != "codex")) return;
+        if (choice is null || choice.Provider != "antigravity") return;
         SelectedModelProvider = choice.Provider;
-        if (choice.Provider == "codex")
-        {
-            SelectedModelId = choice.ModelId;
-            CodexModel = choice.ModelId;
-            SelectedTaskExecutor = "codex";
-        }
-        else
-        {
-            // A grouped AGY entry may represent several concrete CLI slugs.
-            // Resolve the one matching the currently selected effort before
-            // persisting or starting a session.
-            var resolvedModelId = choice.ResolveModelId(AntigravityEffort);
-            SelectedModelId = resolvedModelId;
-            AntigravityModel = resolvedModelId;
-            SelectedTaskExecutor = "default";
-        }
+        // A grouped AGY entry may represent several concrete CLI slugs.
+        // Resolve the one matching the currently selected effort before
+        // persisting or starting a session.
+        var resolvedModelId = choice.ResolveModelId(AntigravityEffort);
+        SelectedModelId = resolvedModelId;
+        AntigravityModel = resolvedModelId;
+        SelectedTaskExecutor = "default";
         IsModelMenuOpen = false;
         if (_initialized && SelectedConversation is not null) _ = RefreshSelectedAgentConfigurationAsync();
     }
@@ -2271,7 +2117,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         catch (Exception exception) { AddSystemMessage($"无法更新 Agent 配置：{exception.Message}"); }
     }
 
-    private static string ExecutorDisplayName(string? provider) => provider switch { "codex" => "Codex", "antigravity" => "Antigravity", _ => "Pi" };
+    private static string ExecutorDisplayName(string? provider) => provider switch { "antigravity" => "Antigravity", _ => "Pi" };
     private void OnTransportError(object? sender, string error) => System.Windows.Application.Current.Dispatcher.Invoke(() =>
     {
         _hostStartedSessionIds.Clear();
@@ -2294,7 +2140,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     }
     private void Save()
     {
-        ManagerConversationStore.Save(Conversations);
+        _conversationWriter.RequestSave();
         _draftDirty = false;
     }
 
@@ -2318,7 +2164,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         _isRestoringDraft = true;
         try
         {
-            _pendingCodexDraftId = null;
             InputText = conversation?.DraftText ?? "";
         }
         finally
@@ -2349,7 +2194,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         // Manager now has one Antigravity context for both conversation and
         // local coding. Keep the legacy provider settings visible/persisted for
         // UI compatibility, but do not bind a new Manager session to API, Pi,
-        // or Codex.
+        // or another legacy Coding Agent.
         item.MainAgent = new ManagerMainAgentBinding { Provider = "antigravity", Transport = "cli", CliPath = AntigravityCliPath, Model = AntigravityModel, Effort = AntigravityEffort, ToolPermission = AntigravityToolPermission, TerminalSandbox = AntigravityTerminalSandbox, TimeoutSeconds = 0 };
         item.CodingAgent = new ManagerCodingAgentBinding { Provider = "antigravity", CliPath = AntigravityCliPath, Model = AntigravityModel, Effort = AntigravityEffort, AntigravityExecutionPolicy = "autonomous" };
         return item;
@@ -2360,7 +2205,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         var legacyMain = conversation.MainAgent;
         var legacyCoding = conversation.CodingAgent;
         var persistedConversationId = conversation.AntigravityConversationId;
-        // Discard old API/Pi/Codex bindings while keeping the transcript and
+        // Discard old API/Pi bindings while keeping the transcript and
         // CompanionProfile. The selected Antigravity CLI/model are retained
         // only when an old Antigravity binding already supplied them.
         if (legacyMain is null || !string.Equals(legacyMain.Provider, "antigravity", StringComparison.OrdinalIgnoreCase))
@@ -2513,15 +2358,12 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
 
     private void LoadSettings(AppSettings settings)
     {
-        DefaultMainAgentProvider = settings.DefaultMainAgentProvider; DefaultCodingAgentProvider = settings.DefaultCodingAgentProvider;
+        DefaultMainAgentProvider = "antigravity"; DefaultCodingAgentProvider = "antigravity";
         BaseUrl = settings.BaseUrl; ModelId = settings.ModelId; PiCredentialId = settings.PiCredentialId;
         MainApiBaseUrl = settings.MainApiBaseUrl; MainApiModelId = settings.MainApiModelId; MainApiCredentialId = settings.MainApiCredentialId; MainApiTimeoutSeconds = settings.MainApiTimeoutSeconds;
         WorkspacePath = settings.WorkspacePath; AutoApproveSafeCommands = settings.AutoApproveSafeCommands; AutoApproveGitOperations = settings.AutoApproveGitOperations;
         AntigravityCliPath = settings.AntigravityCliPath; AntigravityModel = settings.AntigravityModel; AntigravityEffort = settings.AntigravityEffort; AntigravityToolPermission = NormalizeAntigravityToolPermission(settings.AntigravityToolPermission); AntigravityTerminalSandbox = settings.AntigravityTerminalSandbox; AntigravityTimeoutSeconds = 0;
         AntigravityExecutionPolicy = settings.AntigravityExecutionPolicy is "safe_tests" or "autonomous" ? settings.AntigravityExecutionPolicy : "approval";
-        CodexCliPath = settings.CodexCliPath; CodexModel = settings.CodexModel; CodexEffort = settings.CodexEffort;
-        CodexApprovalPolicy = NormalizeCodexApprovalPolicy(settings.CodexApprovalPolicy);
-        CodexSandboxMode = NormalizeCodexSandboxMode(settings.CodexSandboxMode);
         UserId = string.IsNullOrWhiteSpace(settings.UserId) ? "用户" : settings.UserId.Trim();
         UserAvatarPath = settings.UserAvatarPath?.Trim() ?? "";
         AgentAvatarPath = settings.AgentAvatarPath?.Trim() ?? "";
@@ -2566,8 +2408,9 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (_initialized) _ = ActivateSelectedConversationAsync();
     }
 
-    private static void PersistLastSelectedSessionId(string? sessionId)
+    private void PersistLastSelectedSessionId(string? sessionId)
     {
+        if (_suppressSettingsPersistence || _isShuttingDown) return;
         try
         {
             var settings = SettingsStore.Load();
@@ -2613,17 +2456,8 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 _draftDirty = true;
             }
         }
-        // Keep the visible policy selectors aligned with the explicit
-        // @codex routing directive, while still allowing the model menu to
-        // switch back to Antigravity for subsequent messages.
-        if (HasCodexDirective(value) && SelectedModelProvider != "codex")
-        {
-            SelectedModelProvider = "codex";
-            SelectedModelId = CodexModel;
-            SelectedTaskExecutor = "codex";
-        }
     }
-    partial void OnIsBusyChanged(bool value) { SendCommand.NotifyCanExecuteChanged(); OnPropertyChanged(nameof(CanCancel)); OnPropertyChanged(nameof(CanVerifyLastCodexTask)); VerifyLastCodexTaskCommand.NotifyCanExecuteChanged(); }
+    partial void OnIsBusyChanged(bool value) { SendCommand.NotifyCanExecuteChanged(); OnPropertyChanged(nameof(CanCancel)); }
     partial void OnMainProviderAvailableChanged(bool value) => OnPropertyChanged(nameof(MainConnectionLabel));
     partial void OnMainProviderAuthenticatedChanged(bool value) => OnPropertyChanged(nameof(MainConnectionLabel));
     partial void OnMainProviderVersionChanged(string value) => OnPropertyChanged(nameof(MainConnectionLabel));
@@ -2633,8 +2467,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnSelectedModelProviderChanged(string value)
     {
-        if (value != "codex" && value != "antigravity") SelectedModelProvider = "antigravity";
-        OnPropertyChanged(nameof(IsCodexModelSelected));
+        if (value != "antigravity") SelectedModelProvider = "antigravity";
         OnPropertyChanged(nameof(IsAntigravityModelSelected));
         OnPropertyChanged(nameof(AntigravitySandboxMode));
         OnPropertyChanged(nameof(AntigravityApprovalPolicy));
@@ -2651,12 +2484,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
 
     partial void OnSelectedTaskExecutorChanged(string value)
     {
-        if (string.Equals(value, "codex", StringComparison.OrdinalIgnoreCase))
-        {
-            if (SelectedModelProvider != "codex") SelectedModelProvider = "codex";
-            SelectedModelId = CodexModel;
-        }
-        else if (string.Equals(value, "default", StringComparison.OrdinalIgnoreCase) || string.Equals(value, "antigravity", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(value, "default", StringComparison.OrdinalIgnoreCase) || string.Equals(value, "antigravity", StringComparison.OrdinalIgnoreCase))
         {
             if (SelectedModelProvider != "antigravity") SelectedModelProvider = "antigravity";
             SelectedModelId = AntigravityModel;
@@ -2668,13 +2496,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     {
         if (SelectedModelProvider == "antigravity") { SelectedModelId = value; OnPropertyChanged(nameof(SelectedModelLabel)); }
         try { var settings = SettingsStore.Load(); settings.AntigravityModel = value.Trim(); SettingsStore.Save(settings); } catch { }
-        if (_initialized && SelectedConversation is not null) _ = RefreshSelectedAgentConfigurationAsync();
-    }
-
-    partial void OnCodexModelChanged(string value)
-    {
-        if (SelectedModelProvider == "codex") { SelectedModelId = value; OnPropertyChanged(nameof(SelectedModelLabel)); }
-        try { var settings = SettingsStore.Load(); settings.CodexModel = value.Trim(); SettingsStore.Save(settings); } catch { }
         if (_initialized && SelectedConversation is not null) _ = RefreshSelectedAgentConfigurationAsync();
     }
 
@@ -2690,14 +2511,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(resolvedModelId) && !string.Equals(resolvedModelId, AntigravityModel, StringComparison.OrdinalIgnoreCase))
             AntigravityModel = resolvedModelId;
         try { var settings = SettingsStore.Load(); settings.AntigravityEffort = normalized; SettingsStore.Save(settings); } catch { }
-        if (_initialized && SelectedConversation is not null) _ = RefreshSelectedAgentConfigurationAsync();
-    }
-
-    partial void OnCodexEffortChanged(string value)
-    {
-        var normalized = NormalizeCodexEffort(value);
-        if (!string.Equals(value, normalized, StringComparison.Ordinal)) { CodexEffort = normalized; return; }
-        try { var settings = SettingsStore.Load(); settings.CodexEffort = normalized; SettingsStore.Save(settings); } catch { }
         if (_initialized && SelectedConversation is not null) _ = RefreshSelectedAgentConfigurationAsync();
     }
 
@@ -2717,69 +2530,6 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (_initialized && SelectedConversation is not null) _ = RefreshSelectedAgentConfigurationAsync();
     }
 
-    partial void OnCodexApprovalPolicyChanged(string value)
-    {
-        var normalized = NormalizeCodexApprovalPolicy(value);
-        if (!string.Equals(value, normalized, StringComparison.Ordinal))
-        {
-            CodexApprovalPolicy = normalized;
-            return;
-        }
-        try
-        {
-            var settings = SettingsStore.Load();
-            settings.CodexApprovalPolicy = normalized;
-            SettingsStore.Save(settings);
-        }
-        catch { /* Settings persistence must not block sending a message. */ }
-        // Refresh the active ManagerHost session so a running process uses the
-        // newly selected native policy on its next Codex turn.
-        if (_initialized && SelectedConversation is not null) _ = RefreshCodexConfigurationAsync();
-    }
-
-    partial void OnCodexSandboxModeChanged(string value)
-    {
-        var normalized = NormalizeCodexSandboxMode(value);
-        if (!string.Equals(value, normalized, StringComparison.Ordinal))
-        {
-            CodexSandboxMode = normalized;
-            return;
-        }
-        try
-        {
-            var settings = SettingsStore.Load();
-            settings.CodexSandboxMode = normalized;
-            SettingsStore.Save(settings);
-        }
-        catch { /* Settings persistence must not block sending a message. */ }
-        if (_initialized && SelectedConversation is not null) _ = RefreshCodexConfigurationAsync();
-    }
-
-    private async Task RefreshCodexConfigurationAsync()
-    {
-        try
-        {
-            if (SelectedConversation is not null)
-            {
-                await StartOrSyncSessionAsync(SelectedConversation);
-            }
-        }
-        catch (Exception exception) { AddSystemMessage($"无法更新 Codex 审批策略：{exception.Message}"); }
-    }
-
-    private static string NormalizeCodexApprovalPolicy(string? value) => value?.Trim().ToLowerInvariant() switch
-    {
-        "manual" => "on-request",
-        "always" => "always",
-        "on-request" => "on-request",
-        "never" => "never",
-        "untrusted" => "untrusted",
-        // Older IlMatto builds persisted this alias. Map it to the current
-        // native enum instead of sending a custom value to Codex.
-        "unlesstrusted" => "untrusted",
-        _ => "on-request",
-    };
-
     private static string NormalizeAntigravityToolPermission(string? value) => value?.Trim().ToLowerInvariant() switch
     {
         "request-review" or "request_review" or "review" => "request-review",
@@ -2796,28 +2546,42 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         _ => "medium",
     };
 
-    private static string NormalizeCodexEffort(string? value) => value?.Trim().ToLowerInvariant() switch
-    {
-        "minimal" => "minimal",
-        "low" => "low",
-        "high" => "high",
-        "xhigh" => "xhigh",
-        _ => "medium",
-    };
-
-    private static string NormalizeCodexSandboxMode(string? value) => value?.Trim().ToLowerInvariant() switch
-    {
-        "read-only" or "readonly" or "read_only" => "read-only",
-        "danger-full-access" or "dangerfullaccess" or "danger_full_access" => "danger-full-access",
-        "workspace-write" or "workspacewrite" or "workspace_write" => "workspace-write",
-        _ => "workspace-write",
-    };
-
     public async ValueTask DisposeAsync()
     {
+        if (_isShuttingDown)
+        {
+            await _conversationWriter.FlushAsync();
+            _conversationWriter.Dispose();
+            return;
+        }
+        _isShuttingDown = true;
+        SendCommand.NotifyCanExecuteChanged();
+        if (_pipe is not null) { _pipe.EventReceived -= OnHostEvent; _pipe.TransportError -= OnTransportError; }
         CaptureCurrentDraft();
         _draftSaveTimer?.Stop();
-        StopManagerTypewriter();
+        // No window is presenting this replay during shutdown. Materialize all
+        // background events before the final snapshot, including text received
+        // after the user last viewed that conversation.
+        var selected = SelectedConversation;
+        if (selected is not null) CaptureSessionUiState(selected);
+        try
+        {
+            foreach (var conversation in Conversations)
+            {
+                _shutdownConversation = conversation;
+                RestoreSessionUiState(conversation);
+                ReplayBufferedEvents(conversation);
+                FlushCodingText();
+                CompleteStreamingCodingText();
+                StopManagerTypewriter();
+                CaptureSessionUiState(conversation);
+            }
+        }
+        finally
+        {
+            _shutdownConversation = null;
+            RestoreSessionUiState(selected);
+        }
         var shutdownAt = DateTimeOffset.UtcNow;
         foreach (var conversation in Conversations)
         {
@@ -2831,7 +2595,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 foreach (var activity in state.Activities)
                     if (activity.Runtime?.IsActive == true) activity.Runtime.Mark("cancelled", shutdownAt);
                 state.IsBusy = false;
-                state.CodexBusy = false;
+                state.CodingBusy = false;
             }
         }
         if (IsBusy && SelectedConversation is not null)
@@ -2841,8 +2605,17 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         }
         IsBusy = false;
         _taskDurationTimer?.Stop();
+        _activeRuntimes.Dispose();
         Save();
-        if (_pipe is not null) { _pipe.EventReceived -= OnHostEvent; _pipe.TransportError -= OnTransportError; }
-        if (_host is not null) await _host.DisposeAsync();
+        try { await _conversationWriter.FlushAsync(); }
+        finally
+        {
+            // A startup already in flight owns its local process until it sees
+            // the shutdown flag. Let it finish cleanup before WPF exits.
+            if (_hostStartTask is not null)
+                try { await _hostStartTask; } catch { }
+            if (_host is not null) await _host.DisposeAsync();
+        }
+        _conversationWriter.Dispose();
     }
 }

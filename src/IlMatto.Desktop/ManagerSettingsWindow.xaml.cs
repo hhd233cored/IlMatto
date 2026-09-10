@@ -14,7 +14,6 @@ namespace IlMatto.Desktop;
 public partial class ManagerSettingsWindow : Window
 {
     private readonly ManagerViewModel _viewModel;
-    private readonly Dictionary<string, List<string>> _codexModelEfforts = new(StringComparer.OrdinalIgnoreCase);
 
     public ManagerSettingsWindow(ManagerViewModel viewModel)
     {
@@ -34,9 +33,6 @@ public partial class ManagerSettingsWindow : Window
         PiBaseUrlBox.Text = viewModel.BaseUrl;
         PiModelIdBox.Text = viewModel.ModelId;
         PiApiKeyBox.Password = viewModel.PiApiKey;
-        CodexPathBox.Text = viewModel.CodexCliPath;
-        CodexModelBox.Text = viewModel.CodexModel;
-        SelectTextItem(CodexEffortBox, viewModel.CodexEffort);
         CompanionCharacterNameBox.Text = viewModel.CompanionCharacterName;
         CompanionCharacterPromptBox.Text = viewModel.CompanionCharacterPrompt;
         UserIdBox.Text = viewModel.UserId;
@@ -48,9 +44,6 @@ public partial class ManagerSettingsWindow : Window
         GitOperationsBox.IsChecked = viewModel.AutoApproveGitOperations;
         SelectTaggedItem(AgyExecutionPolicyBox, viewModel.AntigravityExecutionPolicy);
         AgyStatusText.Text = "Manager 使用全局 Antigravity CLI、模型和推理强度；模型回合不设应用层超时。点击“刷新 CLI 模型”检查可用模型。";
-        CodexStatusText.Text = "点击“检查 Codex 状态”验证 CLI 和当前账号。";
-        _viewModel.PropertyChanged += ViewModelOnPropertyChanged;
-        Closed += (_, _) => _viewModel.PropertyChanged -= ViewModelOnPropertyChanged;
     }
 
     private async void RefreshModelsButton_OnClick(object sender, RoutedEventArgs e)
@@ -73,54 +66,6 @@ public partial class ManagerSettingsWindow : Window
     {
         _viewModel.AntigravityCliPath = AgyPathBox.Text.Trim();
         _viewModel.OpenAntigravityLoginTerminal();
-    }
-
-    private async void RefreshCodexButton_OnClick(object sender, RoutedEventArgs e)
-    {
-        CodexStatusText.Text = "正在检查 Codex CLI 与登录状态…";
-        try
-        {
-            var executable = string.IsNullOrWhiteSpace(CodexPathBox.Text) ? "codex" : CodexPathBox.Text;
-            var status = await _viewModel.ProbeCodexAsync(executable);
-            CodexStatusText.Text = status.Authenticated == true
-                ? $"{status.Version ?? "Codex App Server"} · 已登录 · {status.Models?.Count ?? 0} 个模型"
-                : $"{status.Version ?? "Codex App Server"} · 尚未登录";
-            CodexPolicyText.Text = string.IsNullOrWhiteSpace(status.Policy) ? "configRequirements/read 未返回强制策略；将继承本机 Codex 配置。" : status.Policy;
-            var current = CodexModelBox.Text;
-            CodexModelBox.Items.Clear();
-            _codexModelEfforts.Clear();
-            foreach (var model in status.Models ?? new List<CodexModelInfo>())
-            {
-                CodexModelBox.Items.Add(model.Id);
-                _codexModelEfforts[model.Id] = model.Efforts;
-            }
-            CodexModelBox.Text = current;
-            UpdateCodexEfforts(current);
-        }
-        catch (Exception exception) { CodexStatusText.Text = exception.Message; }
-    }
-
-    private async void CodexLoginButton_OnClick(object sender, RoutedEventArgs e)
-    {
-        CodexStatusText.Text = "正在启动 Codex 浏览器登录…";
-        try
-        {
-            var executable = string.IsNullOrWhiteSpace(CodexPathBox.Text) ? "codex" : CodexPathBox.Text;
-            await _viewModel.StartCodexLoginAsync(executable);
-            CodexStatusText.Text = "登录页面已在浏览器打开。完成授权后可再次检查状态。";
-        }
-        catch (Exception exception) { CodexStatusText.Text = exception.Message; }
-    }
-
-    private void CodexModelBox_OnSelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateCodexEfforts(CodexModelBox.SelectedItem?.ToString() ?? CodexModelBox.Text);
-
-    private void UpdateCodexEfforts(string? model)
-    {
-        if (string.IsNullOrWhiteSpace(model) || !_codexModelEfforts.TryGetValue(model, out var efforts) || efforts.Count == 0) return;
-        var current = SelectedText(CodexEffortBox, _viewModel.CodexEffort);
-        CodexEffortBox.Items.Clear();
-        foreach (var effort in efforts) CodexEffortBox.Items.Add(new ComboBoxItem { Content = effort });
-        SelectTextItem(CodexEffortBox, efforts.Contains(current, StringComparer.OrdinalIgnoreCase) ? current : efforts[0]);
     }
 
     private void BrowseUserAvatarButton_OnClick(object sender, RoutedEventArgs e) => ChooseAvatar(UserAvatarPathBox, "user");
@@ -208,11 +153,6 @@ public partial class ManagerSettingsWindow : Window
             AntigravityEffort = SelectedText(AgyEffortBox, "medium"),
             AntigravityTimeoutSeconds = agyTimeout,
             AntigravityExecutionPolicy = SelectedTag(AgyExecutionPolicyBox, "approval"),
-            CodexCliPath = CodexPathBox.Text.Trim(),
-            CodexModel = CodexModelBox.Text.Trim(),
-            CodexEffort = SelectedText(CodexEffortBox, "medium"),
-            CodexApprovalPolicy = _viewModel.CodexApprovalPolicy,
-            CodexSandboxMode = _viewModel.CodexSandboxMode,
             UserId = string.IsNullOrWhiteSpace(UserIdBox.Text) ? "用户" : UserIdBox.Text.Trim(),
             UserAvatarPath = UserAvatarPathBox.Text.Trim(),
             AgentAvatarPath = AgentAvatarPathBox.Text.Trim(),
@@ -233,12 +173,6 @@ public partial class ManagerSettingsWindow : Window
     }
 
     private void CancelButton_OnClick(object sender, RoutedEventArgs e) { DialogResult = false; Close(); }
-
-    private void ViewModelOnPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(ManagerViewModel.CodingProviderStatusDetail) && !string.IsNullOrWhiteSpace(_viewModel.CodingProviderStatusDetail))
-            CodexStatusText.Text = _viewModel.CodingProviderStatusDetail;
-    }
 
     private static void SelectTaggedItem(WpfComboBox box, string value)
     {

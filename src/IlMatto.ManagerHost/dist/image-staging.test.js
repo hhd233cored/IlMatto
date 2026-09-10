@@ -39,7 +39,7 @@ test("managed images are copied into the isolated runtime and only that path is 
         assert.match(prompt, /Freshness and niche-knowledge web research rules/i);
         assert.match(prompt, /do not use run_command, grep_search/i);
         assert.match(prompt, /Pass one of the paths above exactly as written/i);
-        assert.match(prompt, /identify_image MCP tool is available/i);
+        assert.doesNotMatch(prompt, /identify_image/i);
         assert.doesNotMatch(prompt, /user supplied name\.png/);
     }
     finally {

@@ -9,8 +9,10 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>IlMatto.Desktop</AssemblyName>
     <RootNamespace>IlMatto.Desktop</RootNamespace>
+    <DefaultItemExcludes>$(DefaultItemExcludes);artifacts/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="IlMatto.Desktop.Tests" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageReference Include="Emoji.Wpf" Version="0.3.4" />
   </ItemGroup>

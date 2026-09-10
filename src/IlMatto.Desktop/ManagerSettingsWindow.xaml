@@ -80,7 +80,6 @@
             <ComboBox x:Name="CodingProviderBox" Margin="0,6,0,16">
               <ComboBoxItem Content="Antigravity Coding Executor" Tag="antigravity"/>
               <ComboBoxItem Content="Pi Coding Agent" Tag="pi"/>
-              <ComboBoxItem Content="Codex CLI App Server" Tag="codex"/>
             </ComboBox>
             <GroupBox Header="Pi Coding Agent" Padding="12" Margin="0,0,0,14">
               <StackPanel>
@@ -90,28 +89,6 @@
                 <TextBox x:Name="PiModelIdBox" Margin="0,6,0,12"/>
                 <TextBlock Text="API Key" FontWeight="SemiBold"/>
                 <PasswordBox x:Name="PiApiKeyBox" Margin="0,6,0,4"/>
-              </StackPanel>
-            </GroupBox>
-            <GroupBox Header="Codex CLI App Server" Padding="12">
-              <StackPanel>
-                <TextBlock Text="Codex CLI 路径" FontWeight="SemiBold"/>
-                <TextBox x:Name="CodexPathBox" Margin="0,6,0,12"/>
-                <TextBlock Text="模型（留空使用 Codex 默认模型）" FontWeight="SemiBold"/>
-                <ComboBox x:Name="CodexModelBox" IsEditable="True" IsTextSearchEnabled="True" SelectionChanged="CodexModelBox_OnSelectionChanged" Margin="0,6,0,12"/>
-                <TextBlock Text="Reasoning effort" FontWeight="SemiBold"/>
-                <ComboBox x:Name="CodexEffortBox" Margin="0,6,0,12">
-                  <ComboBoxItem Content="low"/><ComboBoxItem Content="medium"/><ComboBoxItem Content="high"/><ComboBoxItem Content="xhigh"/><ComboBoxItem Content="max"/><ComboBoxItem Content="ultra"/>
-                </ComboBox>
-                <StackPanel Orientation="Horizontal">
-                  <Button Content="检查 Codex 状态" Click="RefreshCodexButton_OnClick"/>
-                  <Button Content="登录 Codex" Click="CodexLoginButton_OnClick"/>
-                </StackPanel>
-                <TextBlock x:Name="CodexStatusText" Foreground="#64748B" TextWrapping="Wrap" FontSize="12" Margin="0,8,0,0"/>
-                <TextBox x:Name="CodexPolicyText" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MaxHeight="90" FontFamily="Consolas" FontSize="10" Margin="0,8,0,0" ToolTip="configRequirements/read 返回的有效策略"/>
-                <TextBlock Text="Codex 编码任务不设应用层超时；需要结束时请使用取消操作。" Foreground="#31567C" TextWrapping="Wrap" Margin="0,8,0,0"/>
-                <Border Background="#FFF7DF" BorderBrush="#E8C35A" BorderThickness="1" CornerRadius="7" Padding="10" Margin="0,12,0,0">
-                  <TextBlock Text="Codex 继承本机配置、AGENTS.md、技能、插件、MCP 和网络策略。主窗口输入框左下角可切换 sandbox mode 与 approval policy。approval policy 使用 untrusted、on-request、never；always 是 IlMatto 的自动接受扩展。sandbox mode 使用 read-only、workspace-write、danger-full-access；其有效权限可能比 Pi 更宽。" TextWrapping="Wrap" Foreground="#805B12"/>
-                </Border>
               </StackPanel>
             </GroupBox>
           </StackPanel>
@@ -186,8 +163,7 @@
               <ComboBoxItem Content="常规测试预授权（需 AGY 规则）" Tag="safe_tests"/>
               <ComboBoxItem Content="工作区内自主执行" Tag="autonomous"/>
             </ComboBox>
-            <TextBlock Text="Antigravity 编码执行器与角色使用隔离会话。无头模式无法显示逐次授权；逐项审批会软拒绝未预授权命令。若选择“常规测试预授权”，还需在 AGY 的 permissions.allow 中配置精确测试命令；“自主执行”才会自动执行命令。验证任务始终只读快照，并且仅由你在 Codex 完成后主动启动。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,7,0,0"/>
-            <TextBlock Text="上面的自动批准选项只适用于 Pi；Codex 的 approval policy 与 sandbox mode 在主窗口输入框左下角切换。所有 API Key 只保存在 Windows 凭据管理器。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,14,0,0"/>
+            <TextBlock Text="Antigravity 使用统一会话执行对话与编码任务；模型回合不设应用层超时。所有 API Key 只保存在 Windows 凭据管理器。" Foreground="#64748B" TextWrapping="Wrap" Margin="0,7,0,0"/>
           </StackPanel>
         </ScrollViewer>
       </TabItem>

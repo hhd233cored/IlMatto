@@ -93,7 +93,7 @@ export class AntigravityWorkerBridge {
                 ? "这是验证任务：不得修改源工作区文件、不得提交 Git；仅运行用户要求或项目正常测试，并在最终结果中报告验证。"
                 : executionPolicyInstruction(this.settings.executionPolicy),
             this.settings.mode === "verification"
-                ? "该验证由用户在 Codex 任务成功完成后显式启动。"
+                ? "该验证由用户在 Antigravity 任务成功完成后显式启动。"
                 : "除非用户的任务明确要求编译、测试或验证，否则不要自行运行测试；不得把自己作为其他 Agent 的后台验证者。",
             "完成后必须只输出符合给定 JSON Schema 的 CodeResult。",
             "用户任务：",

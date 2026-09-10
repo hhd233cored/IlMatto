@@ -49,21 +49,11 @@ idle
 
 - Manager 新路径不再使用；旧会话仅保留兼容读取能力。
 
-### 3.2 外部编码 Agent 与图片检索工具
+### 3.2 MCP 会话记忆工具
 
-Manager 默认不启动 Pi 或 Codex。独立 Pi 工作台仍通过 AgentHost 工作；可选 Codex 观察通道仅在用户确认任务草稿后启动。
+Manager 不启动额外的 Codex 服务；独立 Pi 工作台仍通过 AgentHost 工作。Manager 会话会临时挂载本地 Agent Tools MCP 壳，只提供 `session_search`、`session_open`、`session_update` 和 `profile_update`，用于受限的会话回忆与画像维护。
 
-可选 Codex 通道由只读 MCP Facade 和 ManagerHost 内部控制面组成：
-
-- Antigravity 可以调用 `draft_codex_task`，但该调用只生成待确认 Prompt，不启动 Codex。
-- 用户在现有审批卡中查看、编辑并确认 Prompt 后，ManagerHost 才启动 Codex App Server。
-- Antigravity 只能按需读取 `get_codex_status`、`get_latest_codex_report`、`get_codex_report` 和 `get_codex_diff`。
-- Codex 实时文本、完整工具输出、内部思考和 thread ID 不发送给 Antigravity。
-- Codex 的完整事件保存在本地观察目录；报告由事件、文件变更、命令退出码、测试结果和最终文本生成。
-- 一个 Manager 会话默认复用一个隐藏 Codex thread，任务按顺序执行，不使用 `turn/steer`。
-- Codex 未安装、未登录或异常退出只影响当前 Codex 任务，统一 Antigravity 会话继续可用。
-
-图片识别后端通过只读 `identify_image` MCP 工具提供给 Agent。它只接收当前 Antigravity 回合内的受管图片附件 ID，并返回最多 5 个候选 `entities`、未归一化的相关性分数和有限匹配数量，不接收网页或图片 URL；分数不是概率，候选实体不能单独证明身份。Host 会重新校验附件路径、限制单会话并发、按 SHA-256 缓存 24 小时，并裁剪每类最多 5 条结果。Google 凭据不可用时返回 `unavailable`，不会影响普通 Antigravity 对话。
+MCP 不提供任务草稿、Provider 控制、状态报告或图片识别。普通图片附件仍会作为原始附件交给 Antigravity；应用不再调用 Google Vision 或维护识图缓存、凭据和网络通道。
 
 ## 4. 本地工具能力
 
@@ -80,7 +70,7 @@ Manager 默认不启动 Pi 或 Codex。独立 Pi 工作台仍通过 AgentHost �
 
 - 通过非交互式 PowerShell 在选定工作区执行命令。
 - 命令输出实时回传，并限制总输出大小。
-- ManagerHost 不为 Antigravity/Codex 任务或命令设置生命周期超时；只有进程启动、连接建立和外部 HTTP 请求保留传输级超时。用户取消、进程异常退出或应用关闭仍会终止任务。
+- ManagerHost 不为 Antigravity 任务或命令设置生命周期超时；只有进程启动、连接建立和外部 HTTP 请求保留传输级超时。用户取消、进程异常退出或应用关闭仍会终止任务。
 - 完全权限模式下，Antigravity 可以按自身策略调用 PowerShell 或其他命令行工具。
 
 ### 4.3 Git
@@ -127,7 +117,7 @@ Antigravity 可以按请求读取或修改 Git 工作区。ManagerHost 不再对
 - 自动批准安全命令：只放行策略识别为只读或验证用途的命令；删除、写文件、网络访问和高风险命令仍需确认。
 - 自动执行本地 Git 操作：放行专用 Git 写工具；不开放远端同步和破坏性 Git 操作。
 
-Manager 默认不启动 Codex；观察通道只在用户确认任务草稿后按需启动。Antigravity 全局 MCP 配置只在 Manager 会话期间增加受控条目，正常关闭时会清理该条目（用户改动过则保留）。
+Antigravity 全局 MCP 配置只在 Manager 会话期间增加受控的会话记忆条目，正常关闭时会清理该条目（用户改动过则保留）。
 
 ### 5.3 工作区说明
 
@@ -161,16 +151,12 @@ Manager 默认不启动 Codex；观察通道只在用户确认任务草稿后按
 
 系统兼容较早版本的会话格式：
 
-- 旧的 Manager 会话会丢弃旧 API、Pi、Coding Agent 和 Codex 绑定，补充统一 Antigravity 配置。
+- 旧的 Manager 会话会丢弃旧 API、Pi 和 Coding Agent 绑定，补充统一 Antigravity 配置；历史 `source: "codex"` 消息仍按原有 Codex 气泡显示。
 - 旧的 Pi transcript 可以转换到当前会话。
 - 旧的单独思路字段会迁移到统一的文本/操作时间线。
 - 过大的历史工具输出会在保存和恢复时限制长度。
 - 旧 Manager 快照中的关系摘要不再注入 prompt；旧用户资料只可作为新 `profile.md` 不存在时的一次性初始化种子。
 - 不对历史 Manager 会话做批量摘要；继续使用某个旧会话时再补写可见 transcript，并由后续 `session_update` 创建摘要。
-
-### 6.4 Codex 观察记录
-
-可选 Codex 通道在 `%LocalAppData%\IlMatto\codex-observation` 保存会话映射、任务事件和最终报告。Antigravity 通过只读 MCP Facade 按需读取报告；ManagerHost 不把 Codex 实时文本注入 Antigravity 会话。报告包含任务摘要、变更文件、命令、测试、警告和工作区指纹，原始事件不会作为模型上下文公开。
 
 ## 7. 桌面功能
 
@@ -195,7 +181,7 @@ Manager 默认不启动 Codex；观察通道只在用户确认任务草稿后按
 
 ### 7.3 设置
 
-Manager 设置当前沿用旧界面字段以保证数据兼容；默认运行时只使用 Antigravity CLI、全局模型、全局推理强度、全局沙箱/审批选择、工作区、角色名称和角色卡。Antigravity 模型列表由 ManagerHost 以 CLI 为全局缓存键在后台探测，切换 Manager 对话不再同步等待 `agy models`；首条消息只在共享探测尚未完成时等待同一个后台任务。首轮普通消息完成后，Host 使用同一 Antigravity 配置启动一次不复用 RP 上下文的独立标题生成调用；失败时桌面端保留首条问题的截断标题。Pi 设置只影响独立 Pi 工作台；若启用会话级 Codex 观察 Facade，Codex 的模型、推理强度、沙箱和审批选择同样来自全局设置，但不会在 Manager 启动时探测或启动 Codex。
+Manager 设置只保留 Antigravity CLI、全局模型、全局推理强度、全局沙箱/审批选择、工作区、角色名称和角色卡。Antigravity 模型列表由 ManagerHost 以 CLI 为全局缓存键在后台探测，切换 Manager 对话不再同步等待 `agy models`；首条消息只在共享探测尚未完成时等待同一个后台任务。首轮普通消息完成后，Host 使用同一 Antigravity 配置启动一次不复用 RP 上下文的独立标题生成调用；失败时桌面端保留首条问题的截断标题。Pi 设置只影响独立 Pi 工作台。
 
 - 角色设定：角色名称和角色卡作为新对话默认角色卡；保存时角色名称会插入角色卡开头。已有对话继续使用创建时的角色卡快照。
 - Agent 运行选择：模型、推理强度、沙箱和审批是全局设置；旧会话快照中的同名字段仅为兼容读取，不再覆盖当前全局选择。
@@ -210,7 +196,7 @@ Manager 设置当前沿用旧界面字段以保证数据兼容；默认运行时
 
 1. 用户在 Manager 发送聊天或本地操作请求。
 2. ManagerHost 加载角色名、角色卡、全局 `profile.md` 和当前会话摘要，随请求提供给统一 Antigravity 会话。
-3. Antigravity 自行判断是否需要本地工具、Codex 观察或记忆工具。
+3. Antigravity 自行判断是否需要本地工具或记忆工具。
 4. 需要历史信息时先搜索摘要，再按需读取有限原文片段；需要持久化时调用 `session_update` 或 `profile_update`。
 5. ManagerHost 流式展示文本、思考/进度、工具开始事件和最终自然语言总结，并异步保存可见用户/助手文本。
 6. 新会话首轮回复完成后，独立标题调用根据首条问题更新侧边栏标题；调用失败不影响回复。
@@ -220,7 +206,7 @@ Manager 设置当前沿用旧界面字段以保证数据兼容；默认运行时
 1. 应用启动时加载本地对话索引。
 2. 用户选择历史对话。
 3. 桌面端发送工作区和兼容配置；Host 将旧绑定迁移为统一 Antigravity 配置。
-4. 不复用旧自定义 Agent、Schema 或 Codex/Pi Worker 状态。
+4. 不复用旧自定义 Agent、Schema 或 Pi Worker 状态。
 
 ## 9. 已知范围与非目标
 
@@ -228,7 +214,7 @@ Manager 设置当前沿用旧界面字段以保证数据兼容；默认运行时
 - 没有安装包、自动更新和 Git 远端同步。
 - 陪伴记忆第一版不使用 embedding、向量数据库或外部 RAG 服务；摘要搜索使用本地文件扫描和关键词匹配。
 - 记忆工具只服务统一 Antigravity Manager；旧 OpenAI-compatible 兼容路径不启用自动记忆。
-- ManagerHost 在 Antigravity 用户级 `%USERPROFILE%/.gemini/config/mcp_config.json` 中临时挂载 `ilmatto-agent-tools-<session-hash>`，保留现有用户 MCP Server；会话结束时仅清理自己仍未被修改的条目。该 Facade 同时承载只读 `identify_image` 和 Codex 观察工具。旧版本支持的工作区插件挂载保留为内部兼容路径，Codex 或 Google Vision 不可用时只停用对应通道。
+- ManagerHost 在 Antigravity 用户级 `%USERPROFILE%/.gemini/config/mcp_config.json` 中临时挂载 `ilmatto-agent-tools-<session-hash>`，保留现有用户 MCP Server；会话结束时仅清理自己仍未被修改的条目。该 Facade 仅承载会话记忆工具。
 - 多数 Slash Command 只完成识别和提示，部分交互式 UI 尚未开放；`/new`、`/name`、`/settings`、`/model`、`/quit` 有桌面端行为。
 - 桌面端当前没有单独的自动化测试项目，主要依赖 Host 测试和手动 UI 验证。
 

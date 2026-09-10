@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using IlMatto.Desktop.Infrastructure;
 using IlMatto.Desktop.Models;
@@ -20,7 +21,6 @@ namespace IlMatto.Desktop.Controls;
 internal sealed class ChatTimelineController : IDisposable
 {
     private const double HeightEpsilon = 0.5;
-    private static readonly TimeSpan ScrollSettlingDelay = TimeSpan.FromMilliseconds(140);
 
     private readonly WpfListBox _list;
     private readonly ScrollViewer _scrollViewer;
@@ -47,9 +47,7 @@ internal sealed class ChatTimelineController : IDisposable
     private bool _isDisposed;
     private bool _refreshQueued;
     private bool _anchorCompensationQueued;
-    private bool _applyingAnchorCompensation;
     private double _pendingAnchorDelta;
-    private DateTime _lastScrollActivityUtc = DateTime.MinValue;
 
     /// <summary>
     /// The air timeline initially creates fixed-height shells. Once a row is
@@ -71,8 +69,8 @@ internal sealed class ChatTimelineController : IDisposable
     public void Attach()
     {
         _list.SizeChanged += ListOnSizeChanged;
-        _list.PreviewMouseWheel += ListOnPreviewMouseWheel;
-        _list.PreviewKeyDown += ListOnPreviewKeyDown;
+        _scrollViewer.AddHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(ScrollThumbOnDragStarted), true);
+        _scrollViewer.AddHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(ScrollThumbOnDragCompleted), true);
         _scrollViewer.ScrollChanged += ScrollViewerOnScrollChanged;
     }
 
@@ -92,6 +90,7 @@ internal sealed class ChatTimelineController : IDisposable
         UnsubscribeEntries();
         CancelQueuedRendering();
         _entries = entries;
+        _pendingAnchorDelta = 0;
         _sessionId = sessionId;
         _entries.CollectionChanged += EntriesOnCollectionChanged;
         foreach (var entry in entries) entry.PropertyChanged += EntryOnPropertyChanged;
@@ -112,39 +111,28 @@ internal sealed class ChatTimelineController : IDisposable
         RefreshVisibleItems();
     }
 
-    public void BeginThumbDrag()
-    {
-        if (_isThumbDragging) return;
-        _isThumbDragging = true;
-        _lastScrollActivityUtc = DateTime.UtcNow;
-        CancelQueuedRendering();
-        foreach (var row in _items.OfType<ChatTimelineMessageRow>())
-            if (!row.Entry.IsStreamingText && !row.Entry.IsThinking)
-                row.RenderContent = false;
-    }
+    // Drag state only prevents automatic offset compensation from fighting
+    // the user's thumb. Rendering keeps its normal distance-prioritized queue.
+    public void BeginThumbDrag() => _isThumbDragging = true;
 
-    public void CompleteThumbDrag()
-    {
-        if (!_isThumbDragging) return;
-        _isThumbDragging = false;
-        _lastScrollActivityUtc = DateTime.UtcNow;
-        RefreshVisibleItems();
-        QueueVisiblePlaceholderRowsForRendering();
-    }
+    public void CompleteThumbDrag() => _isThumbDragging = false;
 
     public void RecordNaturalHeight(ChatTimelineMessageRow row, ChatMessageMeasuredEventArgs measurement)
     {
         if (_isDisposed || _entries is null || !ReferenceEquals(row.Entry, measurement.Entry)) return;
         if (row.Index < 0 || row.Index >= _layout.Count || !ReferenceEquals(_layout[row.Index], row.Entry)) return;
 
-        var delta = _layout.UpdateMeasuredHeight(row.Index, measurement.Width, measurement.Height);
+        var anchor = _layout.FindIndexAtOffset(_scrollViewer.VerticalOffset + _pendingAnchorDelta);
+        // Row heights are keyed by the timeline viewport, not by the narrower
+        // two-column bubble slot that produced a presenter measurement.
+        var delta = _layout.UpdateMeasuredHeight(row.Index, GetContentWidth(), measurement.Height);
         row.ReservedHeight = _layout.GetHeight(row.Index);
         row.ReservedContentHeight = GetContentHeight(row.Entry, row.Index);
         QueuePersistedMeasurement(row);
         if (Math.Abs(delta) < HeightEpsilon) return;
 
         UpdateSpacerHeights();
-        QueueSafeAnchorCompensation(row.Index, delta);
+        QueueSafeAnchorCompensation(row.Index, anchor, delta);
     }
 
     public void RecordNaturalContentHeight(ChatTimelineMessageRow row, ChatMessageMeasuredEventArgs measurement)
@@ -152,13 +140,13 @@ internal sealed class ChatTimelineController : IDisposable
         if (_isDisposed || _entries is null || !ReferenceEquals(row.Entry, measurement.Entry)) return;
         if (row.Index < 0 || row.Index >= _layout.Count || !ReferenceEquals(_layout[row.Index], row.Entry)) return;
 
-        // The presenter measures only the content below the header. Convert it
-        // back to the logical row height before updating the Fenwick index.
-        var rowOverhead = Math.Max(0, row.ReservedHeight - row.ReservedContentHeight);
-        RecordNaturalHeight(row, new ChatMessageMeasuredEventArgs(
-            measurement.Entry,
-            measurement.Height + rowOverhead,
-            measurement.Width));
+        // Header/date/font metrics are not fixed constants. Measure the whole
+        // arranged container so the live row and its replacement spacer occupy
+        // exactly the same space. A pending layout will report again afterwards.
+        if (!row.RenderContent || _list.ItemContainerGenerator.ContainerFromItem(row) is not ListBoxItem container ||
+            !container.IsMeasureValid || !container.IsArrangeValid || container.ActualHeight < 24)
+            return;
+        RecordNaturalHeight(row, new ChatMessageMeasuredEventArgs(row.Entry, container.ActualHeight, container.ActualWidth));
     }
 
     public void RecordNaturalBubbleSize(ChatTimelineMessageRow row, double width, double height)
@@ -170,6 +158,9 @@ internal sealed class ChatTimelineController : IDisposable
 
         row.ReservedBubbleWidth = Math.Clamp(width, 24, 12000);
         row.ReservedBubbleHeight = Math.Clamp(height, 24, 12000);
+        _persistentBubbleWidthBucket = ChatMessageLayoutCache.GetWidthBucket(GetContentWidth());
+        _persistentBubbleHeights[row.Entry] = row.ReservedBubbleHeight;
+        _persistentBubbleWidths[row.Entry] = row.ReservedBubbleWidth;
         QueuePersistedMeasurement(row);
     }
 
@@ -178,8 +169,8 @@ internal sealed class ChatTimelineController : IDisposable
         if (_isDisposed) return;
         _isDisposed = true;
         _list.SizeChanged -= ListOnSizeChanged;
-        _list.PreviewMouseWheel -= ListOnPreviewMouseWheel;
-        _list.PreviewKeyDown -= ListOnPreviewKeyDown;
+        _scrollViewer.RemoveHandler(Thumb.DragStartedEvent, new DragStartedEventHandler(ScrollThumbOnDragStarted));
+        _scrollViewer.RemoveHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler(ScrollThumbOnDragCompleted));
         _scrollViewer.ScrollChanged -= ScrollViewerOnScrollChanged;
         UnsubscribeEntries();
         CancelQueuedRendering();
@@ -199,6 +190,8 @@ internal sealed class ChatTimelineController : IDisposable
             {
                 _rows.Remove(entry);
                 _freshEntries.Remove(entry);
+                _persistentBubbleHeights.Remove(entry);
+                _persistentBubbleWidths.Remove(entry);
             }
 
         if (e.NewItems is not null)
@@ -234,35 +227,30 @@ internal sealed class ChatTimelineController : IDisposable
 
     private void ListOnSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        var bucket = ChatMessageLayoutCache.GetWidthBucket(GetContentWidth());
-        if (bucket != _lastWidthBucket)
-        {
-            _persistentBubbleHeights.Clear();
-            _persistentBubbleWidths.Clear();
-            _persistentBubbleWidthBucket = -1;
-            SynchronizeLayout(preserveAnchor: true);
-            _lastWidthBucket = bucket;
-        }
+        SynchronizeLayout(preserveAnchor: true);
         QueueRefresh();
     }
 
-    private void ListOnPreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e) =>
-        _lastScrollActivityUtc = DateTime.UtcNow;
-
-    private void ListOnPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    private void ScrollThumbOnDragStarted(object sender, DragStartedEventArgs e)
     {
-        if (e.Key is System.Windows.Input.Key.Up or System.Windows.Input.Key.Down or
-            System.Windows.Input.Key.PageUp or System.Windows.Input.Key.PageDown or
-            System.Windows.Input.Key.Home or System.Windows.Input.Key.End)
-            _lastScrollActivityUtc = DateTime.UtcNow;
+        if (IsVerticalScrollThumb(e.OriginalSource as DependencyObject)) BeginThumbDrag();
     }
 
-    private void ScrollViewerOnScrollChanged(object sender, ScrollChangedEventArgs e)
+    private void ScrollThumbOnDragCompleted(object sender, DragCompletedEventArgs e)
     {
-        if (Math.Abs(e.VerticalChange) > 0 && !_applyingAnchorCompensation)
-            _lastScrollActivityUtc = DateTime.UtcNow;
-        QueueRefresh();
+        if (IsVerticalScrollThumb(e.OriginalSource as DependencyObject)) CompleteThumbDrag();
     }
+
+    private bool IsVerticalScrollThumb(DependencyObject? element)
+    {
+        for (var current = element; current is not null && !ReferenceEquals(current, _scrollViewer);
+             current = System.Windows.Media.VisualTreeHelper.GetParent(current))
+            if (current is System.Windows.Controls.Primitives.ScrollBar bar)
+                return bar.Orientation == System.Windows.Controls.Orientation.Vertical && ReferenceEquals(bar.TemplatedParent, _scrollViewer);
+        return false;
+    }
+
+    private void ScrollViewerOnScrollChanged(object sender, ScrollChangedEventArgs e) => QueueRefresh();
 
     private void QueueRefresh()
     {
@@ -278,11 +266,18 @@ internal sealed class ChatTimelineController : IDisposable
     private void SynchronizeLayout(bool preserveAnchor)
     {
         if (_entries is null) return;
+        var widthBucket = ChatMessageLayoutCache.GetWidthBucket(GetContentWidth());
+        if (widthBucket != _lastWidthBucket && widthBucket != _persistentBubbleWidthBucket)
+        {
+            _persistentBubbleHeights.Clear();
+            _persistentBubbleWidths.Clear();
+            _persistentBubbleWidthBucket = -1;
+        }
         var oldAnchor = preserveAnchor && _layout.Count > 0 ? _layout.FindIndexAtOffset(_scrollViewer.VerticalOffset) : -1;
         var oldAnchorEntry = oldAnchor >= 0 ? _layout[oldAnchor] : null;
         var relativeOffset = oldAnchor >= 0 ? _scrollViewer.VerticalOffset - _layout.GetTop(oldAnchor) : 0;
         var changed = _layout.Synchronize(_entries, GetContentWidth());
-        _lastWidthBucket = ChatMessageLayoutCache.GetWidthBucket(GetContentWidth());
+        _lastWidthBucket = widthBucket;
         if (!changed || oldAnchorEntry is null) return;
 
         var newAnchor = _layout.IndexOf(oldAnchorEntry);
@@ -433,7 +428,7 @@ internal sealed class ChatTimelineController : IDisposable
     private void QueueVisiblePlaceholderRowsForRendering()
     {
         CancelQueuedRendering();
-        if (PlaceholderOnly || _isThumbDragging || _firstMaterialized < 0) return;
+        if (PlaceholderOnly || _firstMaterialized < 0) return;
 
         var viewport = Math.Max(1, _scrollViewer.ViewportHeight > 0 ? _scrollViewer.ViewportHeight : _list.ActualHeight);
         var offset = Math.Clamp(_scrollViewer.VerticalOffset, 0, Math.Max(0, _layout.TotalHeight - viewport));
@@ -472,7 +467,7 @@ internal sealed class ChatTimelineController : IDisposable
 
     private void RenderBatch(int generation)
     {
-        if (_isDisposed || generation != _renderGeneration || _isThumbDragging) return;
+        if (_isDisposed || generation != _renderGeneration) return;
         var rendered = 0;
         while (rendered < 2 && _renderQueue.Count > 0)
         {
@@ -486,10 +481,9 @@ internal sealed class ChatTimelineController : IDisposable
         ScheduleRenderBatch(generation);
     }
 
-    private void QueueSafeAnchorCompensation(int changedIndex, double delta)
+    private void QueueSafeAnchorCompensation(int changedIndex, int anchor, double delta)
     {
-        if (_isThumbDragging || IsAtBottom() || DateTime.UtcNow - _lastScrollActivityUtc < ScrollSettlingDelay) return;
-        var anchor = _layout.FindIndexAtOffset(_scrollViewer.VerticalOffset);
+        if (_isThumbDragging || IsAtBottom()) return;
         if (changedIndex >= anchor) return;
 
         _pendingAnchorDelta += delta;
@@ -500,8 +494,7 @@ internal sealed class ChatTimelineController : IDisposable
             _anchorCompensationQueued = false;
             var deltaToApply = _pendingAnchorDelta;
             _pendingAnchorDelta = 0;
-            if (Math.Abs(deltaToApply) < HeightEpsilon || _isThumbDragging || IsAtBottom() ||
-                DateTime.UtcNow - _lastScrollActivityUtc < ScrollSettlingDelay)
+            if (_isDisposed || Math.Abs(deltaToApply) < HeightEpsilon || _isThumbDragging || IsAtBottom())
                 return;
             SetVerticalOffsetSafely(_scrollViewer.VerticalOffset + deltaToApply);
         }, DispatcherPriority.Render);
@@ -509,22 +502,16 @@ internal sealed class ChatTimelineController : IDisposable
 
     private void SetVerticalOffsetSafely(double offset)
     {
-        _applyingAnchorCompensation = true;
-        try
-        {
-            var maximum = Math.Max(0, _layout.TotalHeight - _scrollViewer.ViewportHeight);
-            _scrollViewer.ScrollToVerticalOffset(Math.Clamp(offset, 0, maximum));
-        }
-        finally
-        {
-            _applyingAnchorCompensation = false;
-        }
+        var maximum = Math.Max(0, _layout.TotalHeight - _scrollViewer.ViewportHeight);
+        _scrollViewer.ScrollToVerticalOffset(Math.Clamp(offset, 0, maximum));
     }
 
     private bool IsAtBottom() => _scrollViewer.ExtentHeight <= _scrollViewer.ViewportHeight ||
                                  _scrollViewer.VerticalOffset >= _scrollViewer.ExtentHeight - _scrollViewer.ViewportHeight - 8;
 
-    private double GetContentWidth() => Math.Max(1, _list.ActualWidth - _list.Padding.Left - _list.Padding.Right);
+    private double GetContentWidth() => _scrollViewer.ViewportWidth > 0
+        ? _scrollViewer.ViewportWidth
+        : Math.Max(1, _list.ActualWidth - _list.Padding.Left - _list.Padding.Right);
 
     private void QueuePersistedMeasurement(ChatTimelineMessageRow row)
     {

@@ -561,7 +561,7 @@ export class AntigravitySession {
         const toolInvocation = extractAntigravityToolInvocation(step, pending.seenToolCalls);
         if (toolInvocation) {
             const normalizedTool = toolInvocation.toolName.trim().toLowerCase();
-            const isImageLookupTool = normalizedTool === "identify_image" || normalizedTool === "search_web" || normalizedTool === "searchweb";
+            const isImageLookupTool = normalizedTool === "search_web" || normalizedTool === "searchweb";
             const afterImageLookup = pending.imageLookupToolSeen;
             // Unified mode intentionally keeps AGY's native permissions. For turns
             // with staged images, record a soft-policy violation instead of
@@ -1008,16 +1008,8 @@ export function coordinatorStepPolicyViolation(step, allowedReadPaths = []) {
     }
     return undefined;
 }
-/**
- * Returns the legacy coordinator policy result for image-turn telemetry.
- * `identify_image` is a safe IlMatto MCP tool and therefore does not count as
- * a violation, while all other checks reuse the canonical policy logic. This
- * function never blocks execution.
- */
+/** Returns the coordinator policy result for image-turn telemetry. This never blocks execution. */
 export function imageLookupSoftPolicyViolation(step, allowedReadPaths = []) {
-    const rawToolName = step?.tool_name ?? step?.tool_info?.name ?? step?.tool_info?.tool_name ?? step?.tool_call?.name;
-    if (typeof rawToolName === "string" && rawToolName.trim().toLowerCase() === "identify_image")
-        return undefined;
     return coordinatorStepPolicyViolation(step, allowedReadPaths);
 }
 function isBrowserSubagent(step) {

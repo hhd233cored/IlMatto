@@ -27,11 +27,8 @@ public sealed class ManagerCodingAgentConfig
 {
     [JsonPropertyName("provider")] public string Provider { get; set; } = "pi";
     [JsonPropertyName("executable")] public string? Executable { get; set; }
-    [JsonPropertyName("threadId")] public string? ThreadId { get; set; }
     [JsonPropertyName("model")] public string? Model { get; set; }
     [JsonPropertyName("effort")] public string? Effort { get; set; }
-    [JsonPropertyName("approvalPolicy")] public string? ApprovalPolicy { get; set; }
-    [JsonPropertyName("sandboxMode")] public string? SandboxMode { get; set; }
     [JsonPropertyName("baseUrl")] public string? BaseUrl { get; set; }
     [JsonPropertyName("modelId")] public string? ModelId { get; set; }
     [JsonPropertyName("apiKey")] public string? ApiKey { get; set; }
@@ -66,22 +63,25 @@ public sealed record ActivateManagerSessionMessage(
     string SessionId,
     [property: JsonPropertyName("type")] string Type = "activate_manager_session");
 
-public sealed record SendManagerMessage(string SessionId, string Text, IReadOnlyList<ManagerImageAttachmentMessage>? Attachments = null, string? Executor = null, [property: JsonPropertyName("draftId")] string? DraftId = null, [property: JsonPropertyName("generateTitle")] bool GenerateTitle = false, [property: JsonPropertyName("type")] string Type = "send_manager_message");
+public sealed record SendManagerMessage(string SessionId, string Text, IReadOnlyList<ManagerImageAttachmentMessage>? Attachments = null, string? Executor = null, [property: JsonPropertyName("generateTitle")] bool GenerateTitle = false, [property: JsonPropertyName("type")] string Type = "send_manager_message");
 public sealed record ApproveCodingToolMessage(string SessionId, string CallId, bool Approved, [property: JsonPropertyName("type")] string Type = "approve_coding_tool");
-public sealed record ResolveCodingInteractionMessage(string SessionId, string RequestId, bool Approved, Dictionary<string, object?>? Values = null, [property: JsonPropertyName("type")] string Type = "resolve_coding_interaction");
 public sealed record CancelManagerTurnMessage(
     string SessionId,
-    [property: JsonPropertyName("target")] string Target = "all",
+    [property: JsonPropertyName("target")] string Target = "antigravity",
     [property: JsonPropertyName("type")] string Type = "cancel_manager_turn");
-public sealed record RequestVerificationMessage(string SessionId, string TaskId, [property: JsonPropertyName("type")] string Type = "request_verification");
-public sealed record ProbeCodexMessage(string SessionId, string Executable, string WorkspacePath, [property: JsonPropertyName("type")] string Type = "probe_codex");
-public sealed record StartCodexLoginMessage(string SessionId, string Executable, string WorkspacePath, [property: JsonPropertyName("type")] string Type = "start_codex_login");
 public sealed record ListAgentModelsMessage(string SessionId, string Provider, [property: JsonPropertyName("type")] string Type = "list_agent_models");
-public sealed record DeleteManagerSessionMessage(string SessionId, string WorkspacePath, ManagerMainAgentConfig? MainAgent, ManagerCodingAgentConfig? CodingAgent, string? PiSessionFile, string? CoordinatorSessionFile, string? CodexThreadId, [property: JsonPropertyName("type")] string Type = "delete_manager_session");
+public sealed record DeleteManagerSessionMessage(string SessionId, string WorkspacePath, ManagerMainAgentConfig? MainAgent, ManagerCodingAgentConfig? CodingAgent, string? PiSessionFile, string? CoordinatorSessionFile, [property: JsonPropertyName("type")] string Type = "delete_manager_session");
 public sealed record ManagerShutdownMessage(string? SessionId = null, [property: JsonPropertyName("type")] string Type = "shutdown");
 
 public sealed class ManagerHostEvent
 {
+    private string? _text;
+    internal ManagerHostEvent WithText(string text)
+    {
+        var copy = (ManagerHostEvent)MemberwiseClone();
+        copy._text = text;
+        return copy;
+    }
     [JsonPropertyName("type")] public string Type { get; init; } = "";
     [JsonPropertyName("sessionId")] public string? SessionId { get; init; }
     [JsonPropertyName("taskId")] public string? TaskId { get; init; }
@@ -94,8 +94,7 @@ public sealed class ManagerHostEvent
     [JsonPropertyName("layer")] public string? Layer { get; init; }
     [JsonPropertyName("kind")] public string? Kind { get; init; }
     [JsonPropertyName("title")] public string? Title { get; init; }
-    [JsonPropertyName("text")] public string? Text { get; init; }
-    [JsonPropertyName("draftId")] public string? DraftId { get; init; }
+    [JsonPropertyName("text")] public string? Text { get => _text; init => _text = value; }
     [JsonPropertyName("workspacePath")] public string? WorkspacePath { get; init; }
     [JsonPropertyName("expiresAt")] public string? ExpiresAt { get; init; }
     [JsonPropertyName("state")] public string? State { get; init; }
@@ -143,7 +142,7 @@ public sealed class ManagerHostEvent
     [JsonPropertyName("contextWindow")] public long? ContextWindow { get; init; }
     [JsonPropertyName("cacheReadTokens")] public long? CacheReadTokens { get; init; }
     [JsonPropertyName("antigravityCacheReadTokens")] public long? AntigravityCacheReadTokens { get; init; }
-    [JsonPropertyName("models")] public List<CodexModelInfo>? Models { get; init; }
+    [JsonPropertyName("models")] public List<AgentModelInfo>? Models { get; init; }
     [JsonPropertyName("toolPermission")] public string? ToolPermission { get; init; }
     [JsonPropertyName("terminalSandbox")] public bool? TerminalSandbox { get; init; }
 }
@@ -158,7 +157,7 @@ public sealed class ManagerTaskTraceEvent
     [JsonPropertyName("details")] public JsonElement? Details { get; init; }
 }
 
-public sealed class CodexModelInfo
+public sealed class AgentModelInfo
 {
     [JsonPropertyName("id")] public string Id { get; init; } = "";
     [JsonPropertyName("displayName")] public string DisplayName { get; init; } = "";

@@ -12,7 +12,7 @@ Antigravity CLI 的工具目录包含 `search_web`（Google Search）和 `read_u
 - ManagerHost 的运行时策略只允许受管图片路径的 `view_file`/`read_file`/`readfile`。
 - 隔离设置使用 `toolPermission: "strict"`、`allowNonWorkspaceAccess: false`，且 `permissions.allow` 没有 URL 或浏览器规则。
 - `companion.ts` 明确禁止浏览器、MCP、子 Agent 和其他工具。
-- `codex-worker.ts` 中的 `webSearch` 只是 Codex 结果卡片映射，不是 Antigravity 的工具注册。
+- 已下线的外部编码适配层中的 `webSearch` 仅用于结果卡片映射，并不是 Antigravity 的工具注册。
 
 因此，当前日志中出现“联网搜索”或类似表述，不能单独证明发生了实际搜索。实际工具调用应表现为 `stream-json` 的 `step_update`，其中 `step_type` 为 `tool` 且带有对应 `tool_name`；本次检查的活动源码和现有日志没有找到 `search_web`、`read_url_content` 或浏览器工具调用。日志中的浏览器初始化/Playwright 依赖错误也不等于模型执行了网页搜索。
 

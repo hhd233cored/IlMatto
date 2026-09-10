@@ -8,13 +8,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test dist/**/*.test.js",
-    "mcp": "node dist/codex-mcp.js"
+    "mcp": "node dist/agent-tools-mcp.js"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "typescript": "^5.8.3"
-  },
-  "dependencies": {
-    "google-auth-library": "^10.9.1"
   }
 }

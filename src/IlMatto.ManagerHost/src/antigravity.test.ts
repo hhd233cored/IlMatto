@@ -98,10 +98,10 @@ test("coordinator allows view_file only for the current managed image path", () 
   assert.match(coordinatorStepPolicyViolation({ step_type: "tool", tool_name: "view_file", tool_info: { parameters: {} } }, [allowed]) ?? "", /verifiable image path/);
 });
 
-test("image lookup soft policy observes unsafe tools without treating identify_image as a violation", () => {
+test("image-turn soft policy permits web research and observes unsafe tools", () => {
   const allowed = "C:\\runtime\\attachments\\session\\image.png";
-  assert.equal(imageLookupSoftPolicyViolation({ step_type: "tool", tool_name: "identify_image", tool_info: { parameters: { attachment_id: "image-1" } } }, [allowed]), undefined);
   assert.equal(imageLookupSoftPolicyViolation({ step_type: "tool", tool_name: "search_web", tool_info: { parameters: { query: "character" } } }, [allowed]), undefined);
+  assert.match(imageLookupSoftPolicyViolation({ step_type: "tool", tool_name: "identify_image", tool_info: { parameters: { attachment_id: "image-1" } } }, [allowed]) ?? "", /forbidden tool: identify_image/);
   assert.match(imageLookupSoftPolicyViolation({ step_type: "tool", tool_name: "run_command" }, [allowed]) ?? "", /forbidden tool: run_command/);
   assert.match(imageLookupSoftPolicyViolation({ step_type: "tool", tool_name: "view_file", tool_info: { parameters: { AbsolutePath: "C:\\runtime\\workspace\\notes.txt" } } }, [allowed]) ?? "", /current managed image set/);
 });
@@ -309,7 +309,7 @@ test("unified image turns record soft-policy violations without interrupting the
   const runtime = { root, schemaPath: path.join(root, "schema.json"), logPath: path.join(root, "agy.log"), agentName: "ilmatto-manager-test" } as ManagerRuntime;
   const process = new ScriptedAntigravityProcess((instance) => {
     instance.emitInit();
-    instance.emitTool("identify_image", "lookup-1");
+    instance.emitTool("search_web", "lookup-1");
     instance.emitTool("run_command", "command-1");
     instance.emitResult({ status: "SUCCESS", response: "识图完成" });
   });

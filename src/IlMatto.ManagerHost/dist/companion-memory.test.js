@@ -13,6 +13,16 @@ async function withStore(run) {
         await rm(root, { recursive: true, force: true });
     }
 }
+test("ensureTranscript seeds once and leaves existing history unchanged", async () => {
+    await withStore(async (store, root) => {
+        const history = [{ role: "user", text: "完整旧记录", createdAt: "2026-09-10T00:00:00Z" }];
+        await store.ensureTranscript("seeded", history);
+        const transcriptPath = path.join(root, "sessions", "seeded", "transcript.jsonl");
+        const before = await readFile(transcriptPath, "utf8");
+        await store.ensureTranscript("seeded", [{ ...history[0], text: "不得追加或替换" }]);
+        assert.equal(await readFile(transcriptPath, "utf8"), before);
+    });
+});
 test("profile updates merge into a readable markdown file and are bounded", async () => {
     await withStore(async (store) => {
         assert.equal(await store.readProfile(), "# 用户画像\n\n## 基本信息\n\n## 兴趣\n\n## 互动偏好\n\n## 边界与注意事项\n\n## 当前关注");

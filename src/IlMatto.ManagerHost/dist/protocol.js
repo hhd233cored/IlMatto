@@ -52,37 +52,14 @@ export function isManagerClientMessage(value) {
                 (message.text.length > 0 || (Array.isArray(attachments) && attachments.length > 0)) &&
                 (message.executor === undefined || isCodingProvider(message.executor)) &&
                 (attachments === undefined || (Array.isArray(attachments) && attachments.every(isManagerImageAttachment))) &&
-                (message.draftId === undefined || (typeof message.draftId === "string" && message.draftId.trim().length > 0)) &&
                 (message.generateTitle === undefined || typeof message.generateTitle === "boolean");
         }
         case "approve_coding_tool": return session && typeof message.callId === "string" && typeof message.approved === "boolean";
-        case "resolve_coding_interaction": return session && typeof message.requestId === "string" && typeof message.approved === "boolean";
-        case "codex_observation_request": {
-            if (!session || typeof message.requestId !== "string" || !message.requestId || !isCodexObservationOperation(message.operation))
-                return false;
-            if (message.workspacePath !== undefined && typeof message.workspacePath !== "string")
-                return false;
-            if (message.prompt !== undefined && typeof message.prompt !== "string")
-                return false;
-            if (message.taskId !== undefined && typeof message.taskId !== "string")
-                return false;
-            if (message.maxBytes !== undefined && (typeof message.maxBytes !== "number" || !Number.isInteger(message.maxBytes) || message.maxBytes < 1 || message.maxBytes > 2_000_000))
-                return false;
-            return message.attachments === undefined || (Array.isArray(message.attachments) && message.attachments.every(isManagerImageAttachment));
-        }
-        case "agent_tool_request":
-            return session && typeof message.requestId === "string" && message.requestId.length > 0 &&
-                message.operation === "identify_image" &&
-                (message.attachmentId === undefined || (typeof message.attachmentId === "string" && message.attachmentId.trim().length > 0)) &&
-                (message.question === undefined || typeof message.question === "string") &&
-                message.path === undefined && message.url === undefined;
         case "companion_memory_request":
             return isCompanionMemoryRequest(message, session);
-        case "cancel_manager_turn": return session && (message.target === undefined || message.target === "antigravity" || message.target === "codex" || message.target === "all");
+        case "cancel_manager_turn": return session && (message.target === undefined || message.target === "antigravity" || message.target === "all");
         case "request_verification": return session && typeof message.taskId === "string" && message.taskId.length > 0;
-        case "probe_codex": return session && (message.executable === undefined || typeof message.executable === "string");
-        case "start_codex_login": return session && (message.executable === undefined || typeof message.executable === "string");
-        case "list_agent_models": return session && (message.provider === "antigravity" || message.provider === "codex");
+        case "list_agent_models": return session && message.provider === "antigravity";
         case "delete_manager_session": return session;
         case "shutdown": return message.sessionId === undefined || typeof message.sessionId === "string";
         default: return false;
@@ -174,18 +151,6 @@ export function normalizeManagerImageAttachments(attachments) {
         order: attachment.order ?? index,
     })).sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
 }
-/**
- * Parse the explicit user-facing Codex directive. Only a directive at the
- * beginning of the message is routed; mentions in ordinary prose remain part
- * of the Antigravity prompt. Both `@codex prompt` and `@codex: prompt` are
- * accepted, while a bare directive is rejected so it cannot launch an empty
- * Codex turn.
- */
-export function parseCodexDirective(text) {
-    const match = /^\s*@codex(?:\s+|:\s*)([\s\S]*?)\s*$/i.exec(text);
-    const prompt = match?.[1]?.trim();
-    return prompt || undefined;
-}
 export function isMainAgentConfig(value) {
     if (!value || typeof value !== "object")
         return false;
@@ -206,27 +171,15 @@ export function isCodingAgentConfig(value) {
     if (!value || typeof value !== "object")
         return false;
     const item = value;
-    if (item.provider === "codex")
-        return (item.approvalPolicy === undefined || isCodexApprovalPolicy(item.approvalPolicy)) &&
-            (item.sandboxMode === undefined || isCodexSandboxMode(item.sandboxMode));
     if (item.provider === "antigravity")
         return item.executionPolicy === undefined || ["approval", "safe_tests", "autonomous"].includes(String(item.executionPolicy));
     return item.provider === "pi" && typeof item.baseUrl === "string" && typeof item.modelId === "string";
-}
-export function isCodexApprovalPolicy(value) {
-    return value === "untrusted" || value === "on-request" || value === "never" || value === "always";
-}
-export function isCodexSandboxMode(value) {
-    return value === "read-only" || value === "workspace-write" || value === "danger-full-access";
 }
 export function isAntigravityToolPermission(value) {
     return value === "request-review" || value === "proceed-in-sandbox" || value === "always-proceed" || value === "strict";
 }
 export function isCodingProvider(value) {
-    return value === "antigravity" || value === "pi" || value === "codex";
-}
-export function isCodexObservationOperation(value) {
-    return value === "draft_codex_task" || value === "get_codex_status" || value === "get_latest_codex_report" || value === "get_codex_report" || value === "get_codex_diff";
+    return value === "antigravity" || value === "pi";
 }
 /** Select the reusable CLI conversation id from both the current and legacy
  * start-message shapes. SDK-only references are intentionally ignored. */

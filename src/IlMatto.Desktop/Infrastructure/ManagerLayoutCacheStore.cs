@@ -13,6 +13,7 @@ namespace IlMatto.Desktop.Infrastructure;
 internal static class ManagerLayoutCacheStore
 {
     private const int MaxEntries = 10_000;
+    private const int CurrentGeometryVersion = 2;
     private const int WidthBucketSize = 32;
     private const double GeometryEpsilon = 0.5;
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
@@ -154,7 +155,10 @@ internal static class ManagerLayoutCacheStore
             var path = GetPath(sessionId);
             if (!File.Exists(path)) return false;
             var loaded = JsonSerializer.Deserialize<ManagerLayoutCacheSnapshot>(File.ReadAllText(path), Options);
-            if (loaded is null || !string.Equals(loaded.SessionId, sessionId, StringComparison.Ordinal) ||
+            // Earlier air-timeline hints added a guessed header overhead to
+            // bubble heights. Rebuild those UI-only hints from complete rows.
+            if (loaded is null || loaded.GeometryVersion != CurrentGeometryVersion ||
+                !string.Equals(loaded.SessionId, sessionId, StringComparison.Ordinal) ||
                 loaded.WidthBucket != widthBucket)
                 return false;
             snapshot = loaded;
@@ -173,6 +177,7 @@ internal static class ManagerLayoutCacheStore
 
         var snapshot = new ManagerLayoutCacheSnapshot
         {
+            GeometryVersion = CurrentGeometryVersion,
             SessionId = sessionId,
             WidthBucket = widthBucket,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -207,6 +212,7 @@ internal static class ManagerLayoutCacheStore
 
 internal sealed class ManagerLayoutCacheSnapshot
 {
+    public int GeometryVersion { get; set; }
     public string SessionId { get; set; } = "";
     public int WidthBucket { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }

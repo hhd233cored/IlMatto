@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ProfilePatch, ProfileSection, SessionSummary, SessionSummaryPatch, TranscriptEntry } from "./protocol.js";
@@ -131,7 +131,7 @@ export class CompanionMemoryStore {
     const safeId = safeSessionId(sessionId);
     const transcriptPath = path.join(this.getSessionDirectory(safeId), "transcript.jsonl");
     try {
-      await readFile(transcriptPath, "utf8");
+      await stat(transcriptPath);
       return;
     } catch (error: any) {
       if (error?.code !== "ENOENT") return;

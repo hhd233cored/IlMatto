@@ -89,7 +89,7 @@ export type CodeResult = {
   needsUserDecision: boolean;
 };
 
-export type CodingProvider = "antigravity" | "pi" | "codex";
+export type CodingProvider = "antigravity" | "pi";
 export type AntigravityExecutionPolicy = "approval" | "safe_tests" | "autonomous";
 export type AntigravityToolPermission = "request-review" | "proceed-in-sandbox" | "always-proceed" | "strict";
 
@@ -97,76 +97,6 @@ export type AgentModelInfo = {
   id: string;
   displayName: string;
   efforts: string[];
-};
-
-export type CodexTaskState =
-  | "draft"
-  | "queued"
-  | "running"
-  | "awaiting_user_input"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "partial";
-
-export type CodexTaskReport = {
-  taskId: string;
-  sessionId: string;
-  state: CodexTaskState;
-  summary: string;
-  changedFiles: Array<{ path: string; additions?: number; deletions?: number }>;
-  commands: Array<{ command: string; exitCode?: number; summary?: string }>;
-  tests: Array<{ name?: string; status: "passed" | "failed" | "skipped" | "unknown"; summary?: string }>;
-  warnings: string[];
-  pendingQuestions: string[];
-  workspaceFingerprint?: string;
-  startedAt?: string;
-  completedAt?: string;
-  /** Authoritative wall-clock duration of the Codex task in milliseconds. */
-  durationMs?: number;
-};
-
-export type CodexTaskDraft = {
-  draftId: string;
-  sessionId: string;
-  workspacePath: string;
-  prompt: string;
-  attachments: ManagerImageAttachment[];
-  promptHash: string;
-  createdAt: string;
-  expiresAt: string;
-  state: "awaiting_user_confirmation" | "rejected" | "expired";
-};
-
-export type CodexObservationStatus = {
-  sessionId: string;
-  state: "idle" | CodexTaskState | "unavailable";
-  taskId?: string;
-  phase?: string;
-  reportAvailable: boolean;
-  message?: string;
-  startedAt?: string;
-  completedAt?: string;
-  durationMs?: number;
-};
-
-export type CodexObservationOperation =
-  | "draft_codex_task"
-  | "get_codex_status"
-  | "get_latest_codex_report"
-  | "get_codex_report"
-  | "get_codex_diff";
-
-/** Operations exposed by the generic, read-only IlMatto Agent Tools MCP. */
-export type AgentToolOperation = "identify_image";
-
-export type AgentToolRequest = {
-  type: "agent_tool_request";
-  sessionId: string;
-  requestId: string;
-  operation: AgentToolOperation;
-  attachmentId?: string;
-  question?: string;
 };
 
 /** A private, local-only audit item. It is never valid coordinator input. */
@@ -218,15 +148,8 @@ export type MainAgentConfig =
   | { provider: "antigravity"; transport?: AntigravityTransport; executable?: string; conversationId?: string; sdkSessionRef?: string; legacyCliConversationId?: string; model?: string; effort?: "low" | "medium" | "high"; timeoutSeconds?: number; toolPermission?: AntigravityToolPermission; terminalSandbox?: boolean }
   | { provider: "openai_compatible"; baseUrl: string; modelId: string; apiKey?: string; sessionFile?: string; timeoutSeconds?: number };
 
-/** Native Codex App Server approval policies plus IlMatto's auto-accept mode. */
-export type CodexApprovalPolicy = "untrusted" | "on-request" | "never" | "always";
-
-/** Native Codex CLI/App Server sandbox modes as exposed by the desktop UI. */
-export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-
 export type CodingAgentConfig =
   | { provider: "pi"; baseUrl: string; modelId: string; apiKey?: string; sessionFile?: string; autoApproveSafeCommands?: boolean; autoApproveGitOperations?: boolean }
-  | { provider: "codex"; executable?: string; threadId?: string; model?: string; effort?: string; approvalPolicy?: CodexApprovalPolicy; sandboxMode?: CodexSandboxMode }
   | { provider: "antigravity"; executable?: string; model?: string; effort?: "low" | "medium" | "high"; executionPolicy?: AntigravityExecutionPolicy; conversationId?: string };
 
 export type ExecutorProfiles = Partial<Record<CodingProvider, CodingAgentConfig>>;
@@ -245,28 +168,13 @@ export type ManagerClientMessage =
       agyModel?: string; effort?: "low" | "medium" | "high"; timeoutSeconds?: number;
   }
   | { type: "activate_manager_session"; sessionId: string }
-  | { type: "send_manager_message"; sessionId: string; text: string; executor?: CodingProvider; attachments?: ManagerImageAttachment[]; draftId?: string; generateTitle?: boolean }
+  | { type: "send_manager_message"; sessionId: string; text: string; executor?: CodingProvider; attachments?: ManagerImageAttachment[]; generateTitle?: boolean }
   | { type: "approve_coding_tool"; sessionId: string; callId: string; approved: boolean }
-  | { type: "resolve_coding_interaction"; sessionId: string; requestId: string; approved: boolean; values?: Record<string, unknown> }
-  | {
-      type: "codex_observation_request";
-      sessionId: string;
-      requestId: string;
-      operation: CodexObservationOperation;
-      workspacePath?: string;
-      prompt?: string;
-      attachments?: ManagerImageAttachment[];
-      taskId?: string;
-      maxBytes?: number;
-    }
-  | AgentToolRequest
   | CompanionMemoryRequest
-  | { type: "cancel_manager_turn"; sessionId: string; target?: "antigravity" | "codex" | "all" }
+  | { type: "cancel_manager_turn"; sessionId: string; target?: "antigravity" | "all" }
   | { type: "request_verification"; sessionId: string; taskId: string }
-  | { type: "probe_codex"; sessionId: string; executable?: string; workspacePath?: string }
-  | { type: "start_codex_login"; sessionId: string; executable?: string; workspacePath?: string }
-  | { type: "list_agent_models"; sessionId: string; provider: "antigravity" | "codex" }
-  | { type: "delete_manager_session"; sessionId: string; workspacePath?: string; mainAgent?: MainAgentConfig; codingAgent?: CodingAgentConfig; piSessionFile?: string; coordinatorSessionFile?: string; codexThreadId?: string }
+  | { type: "list_agent_models"; sessionId: string; provider: "antigravity" }
+  | { type: "delete_manager_session"; sessionId: string; workspacePath?: string; mainAgent?: MainAgentConfig; codingAgent?: CodingAgentConfig; piSessionFile?: string; coordinatorSessionFile?: string }
   | { type: "shutdown"; sessionId?: string };
 
 export type ManagerHostMessage =
@@ -274,22 +182,17 @@ export type ManagerHostMessage =
   | { type: "manager_session_ready"; sessionId: string; mainProvider: MainAgentConfig["provider"]; codingProvider: CodingProvider; mainSessionRef?: string; codingSessionRef?: string; agyConversationId?: string; piSessionFile?: string; antigravityAvailable?: boolean; authenticated?: boolean; version?: string; antigravityTransport?: AntigravityTransport }
   | { type: "provider_status"; sessionId: string; layer: "main" | "coding"; provider: MainAgentConfig["provider"] | CodingProvider; available: boolean; authenticated?: boolean; version?: string; message?: string; policy?: string }
   | { type: "antigravity_status"; sessionId: string; available: boolean; authenticated: boolean; version?: string; message?: string; models?: AgentModelInfo[] }
-  | { type: "manager_state"; sessionId: string; state: "idle" | "routing" | "responding" | "coding" | "waiting_approval" | "cancelled" | "error"; turnId?: string; taskId?: string; provider?: "antigravity" | "api_manager" | "codex"; startedAt?: string; completedAt?: string; durationMs?: number }
+  | { type: "manager_state"; sessionId: string; state: "idle" | "routing" | "responding" | "coding" | "waiting_approval" | "cancelled" | "error"; turnId?: string; taskId?: string; provider?: "antigravity" | "api_manager"; startedAt?: string; completedAt?: string; durationMs?: number }
   | { type: "manager_delta"; sessionId: string; source: "antigravity" | "api_manager"; text: string }
   | { type: "manager_thinking_delta"; sessionId: string; source: "antigravity" | "api_manager"; text: string }
   | { type: "manager_tool_status"; sessionId: string; source: "antigravity" | "api_manager"; callId: string; tool: string; text: string; state: "started" | "completed" }
   | { type: "manager_completed"; sessionId: string; source: "antigravity" | "api_manager"; text: string; action: "delegate_code" | "respond" | "ask_user"; final?: boolean; turnId?: string; startedAt?: string; completedAt?: string; durationMs?: number }
   | { type: "manager_title"; sessionId: string; title: string }
   | { type: "manager_metrics"; sessionId: string; provider: "antigravity" | "api_manager"; contextTokens?: number; contextWindow?: number; cacheReadTokens?: number; antigravityCacheReadTokens?: number }
-  | { type: "codex_prompt_draft"; sessionId: string; draftId: string; text: string; workspacePath: string; expiresAt?: string }
   | { type: "delegation_started"; sessionId: string; taskId: string; provider: CodingProvider; startedAt?: string }
   | { type: "coding_delta"; sessionId: string; taskId?: string; source: CodingProvider; text: string }
   | { type: "coding_thinking_delta"; sessionId: string; taskId?: string; source: CodingProvider; text: string }
   | { type: "coding_tool_approval_request"; sessionId: string; callId: string; tool: string; summary: string; details: string; diff?: string }
-  | { type: "coding_interaction_request"; sessionId: string; requestId: string; provider: CodingProvider; kind: CodingInteractionKind; title: string; details: string; command?: string; diff?: string; fields?: unknown; url?: string }
-  | { type: "coding_interaction_completed"; sessionId: string; requestId: string; provider: CodingProvider }
-  | { type: "codex_observation_response"; sessionId: string; requestId: string; ok: boolean; data?: unknown; error?: { code: string; message: string } }
-  | { type: "agent_tool_response"; sessionId: string; requestId: string; ok: boolean; data?: unknown; error?: { code: string; message: string } }
   | { type: "companion_memory_response"; sessionId: string; requestId: string; ok: boolean; data?: unknown; error?: { code: string; message: string } }
   | { type: "coding_tool_started"; sessionId: string; callId: string; tool: string; command?: string; taskId?: string; source?: CodingProvider }
   | { type: "coding_tool_output"; sessionId: string; callId: string; tool: string; text: string; taskId?: string; source?: CodingProvider }
@@ -299,12 +202,9 @@ export type ManagerHostMessage =
   | { type: "verification_started"; sessionId: string; taskId: string; provider: "antigravity" }
   | { type: "verification_result"; sessionId: string; taskId: string; result: CodeResult }
   | { type: "task_trace"; sessionId: string; event: TaskTraceEvent }
-  | { type: "codex_account_status"; sessionId: string; available: boolean; authenticated: boolean; version?: string; models?: Array<{ id: string; displayName: string; efforts: string[] }>; policy?: string; message?: string }
-  | { type: "codex_login_started"; sessionId: string; loginId: string; url: string }
-  | { type: "codex_login_completed"; sessionId: string; loginId?: string; ok: boolean; message?: string }
-  | { type: "agent_models"; sessionId: string; provider: "antigravity" | "codex"; available: boolean; authenticated: boolean; models: AgentModelInfo[]; message?: string }
+  | { type: "agent_models"; sessionId: string; provider: "antigravity"; available: boolean; authenticated: boolean; models: AgentModelInfo[]; message?: string }
   | { type: "manager_session_deleted"; sessionId: string }
-  | { type: "manager_error"; sessionId?: string; provider?: "antigravity" | "api_manager" | "codex"; code: string; message: string };
+  | { type: "manager_error"; sessionId?: string; provider?: "antigravity" | "api_manager"; code: string; message: string };
 
 export function isManagerClientMessage(value: unknown): value is ManagerClientMessage {
   if (!value || typeof value !== "object") return false;
@@ -329,32 +229,14 @@ export function isManagerClientMessage(value: unknown): value is ManagerClientMe
         (message.text.length > 0 || (Array.isArray(attachments) && attachments.length > 0)) &&
         (message.executor === undefined || isCodingProvider(message.executor)) &&
         (attachments === undefined || (Array.isArray(attachments) && attachments.every(isManagerImageAttachment))) &&
-        (message.draftId === undefined || (typeof message.draftId === "string" && message.draftId.trim().length > 0)) &&
         (message.generateTitle === undefined || typeof message.generateTitle === "boolean");
     }
     case "approve_coding_tool": return session && typeof message.callId === "string" && typeof message.approved === "boolean";
-    case "resolve_coding_interaction": return session && typeof message.requestId === "string" && typeof message.approved === "boolean";
-    case "codex_observation_request": {
-      if (!session || typeof message.requestId !== "string" || !message.requestId || !isCodexObservationOperation(message.operation)) return false;
-      if (message.workspacePath !== undefined && typeof message.workspacePath !== "string") return false;
-      if (message.prompt !== undefined && typeof message.prompt !== "string") return false;
-      if (message.taskId !== undefined && typeof message.taskId !== "string") return false;
-      if (message.maxBytes !== undefined && (typeof message.maxBytes !== "number" || !Number.isInteger(message.maxBytes) || message.maxBytes < 1 || message.maxBytes > 2_000_000)) return false;
-      return message.attachments === undefined || (Array.isArray(message.attachments) && message.attachments.every(isManagerImageAttachment));
-    }
-    case "agent_tool_request":
-      return session && typeof message.requestId === "string" && message.requestId.length > 0 &&
-        message.operation === "identify_image" &&
-        (message.attachmentId === undefined || (typeof message.attachmentId === "string" && message.attachmentId.trim().length > 0)) &&
-        (message.question === undefined || typeof message.question === "string") &&
-        message.path === undefined && message.url === undefined;
     case "companion_memory_request":
       return isCompanionMemoryRequest(message, session);
-    case "cancel_manager_turn": return session && (message.target === undefined || message.target === "antigravity" || message.target === "codex" || message.target === "all");
+    case "cancel_manager_turn": return session && (message.target === undefined || message.target === "antigravity" || message.target === "all");
     case "request_verification": return session && typeof message.taskId === "string" && message.taskId.length > 0;
-    case "probe_codex": return session && (message.executable === undefined || typeof message.executable === "string");
-    case "start_codex_login": return session && (message.executable === undefined || typeof message.executable === "string");
-    case "list_agent_models": return session && (message.provider === "antigravity" || message.provider === "codex");
+    case "list_agent_models": return session && message.provider === "antigravity";
     case "delete_manager_session": return session;
     case "shutdown": return message.sessionId === undefined || typeof message.sessionId === "string";
     default: return false;
@@ -445,19 +327,6 @@ export function normalizeManagerImageAttachments(attachments: readonly ManagerIm
   })).sort((left, right) => (left.order ?? 0) - (right.order ?? 0));
 }
 
-/**
- * Parse the explicit user-facing Codex directive. Only a directive at the
- * beginning of the message is routed; mentions in ordinary prose remain part
- * of the Antigravity prompt. Both `@codex prompt` and `@codex: prompt` are
- * accepted, while a bare directive is rejected so it cannot launch an empty
- * Codex turn.
- */
-export function parseCodexDirective(text: string): string | undefined {
-  const match = /^\s*@codex(?:\s+|:\s*)([\s\S]*?)\s*$/i.exec(text);
-  const prompt = match?.[1]?.trim();
-  return prompt || undefined;
-}
-
 export function isMainAgentConfig(value: unknown): value is MainAgentConfig {
   if (!value || typeof value !== "object") return false;
   const item = value as Record<string, unknown>;
@@ -477,18 +346,8 @@ export function isMainAgentConfig(value: unknown): value is MainAgentConfig {
 export function isCodingAgentConfig(value: unknown): value is CodingAgentConfig {
   if (!value || typeof value !== "object") return false;
   const item = value as Record<string, unknown>;
-  if (item.provider === "codex") return (item.approvalPolicy === undefined || isCodexApprovalPolicy(item.approvalPolicy)) &&
-    (item.sandboxMode === undefined || isCodexSandboxMode(item.sandboxMode));
   if (item.provider === "antigravity") return item.executionPolicy === undefined || ["approval", "safe_tests", "autonomous"].includes(String(item.executionPolicy));
   return item.provider === "pi" && typeof item.baseUrl === "string" && typeof item.modelId === "string";
-}
-
-export function isCodexApprovalPolicy(value: unknown): value is CodexApprovalPolicy {
-  return value === "untrusted" || value === "on-request" || value === "never" || value === "always";
-}
-
-export function isCodexSandboxMode(value: unknown): value is CodexSandboxMode {
-  return value === "read-only" || value === "workspace-write" || value === "danger-full-access";
 }
 
 export function isAntigravityToolPermission(value: unknown): value is AntigravityToolPermission {
@@ -496,11 +355,7 @@ export function isAntigravityToolPermission(value: unknown): value is Antigravit
 }
 
 export function isCodingProvider(value: unknown): value is CodingProvider {
-  return value === "antigravity" || value === "pi" || value === "codex";
-}
-
-export function isCodexObservationOperation(value: unknown): value is CodexObservationOperation {
-  return value === "draft_codex_task" || value === "get_codex_status" || value === "get_latest_codex_report" || value === "get_codex_report" || value === "get_codex_diff";
+  return value === "antigravity" || value === "pi";
 }
 
 /** Select the reusable CLI conversation id from both the current and legacy

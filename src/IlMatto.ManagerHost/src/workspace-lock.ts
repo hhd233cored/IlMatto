@@ -4,7 +4,7 @@ export type WorkspaceLease = {
   workspacePath: string;
   sessionId: string;
   taskId: string;
-  provider: "antigravity" | "codex";
+  provider: "antigravity";
   mode: "read" | "write";
 };
 
@@ -42,7 +42,7 @@ export class WorkspaceLockManager {
     if (mode === "write") {
       const holder = this.writers.get(normalizedPath);
       if (holder && holder.taskId !== taskId)
-        throw new WorkspaceLockError("WORKSPACE_BUSY", `工作区正由 ${holder.provider === "codex" ? "Codex" : "Antigravity"} 任务 ${holder.taskId} 使用。`);
+        throw new WorkspaceLockError("WORKSPACE_BUSY", `工作区正由 Antigravity 任务 ${holder.taskId} 使用。`);
     }
 
     const lease: WorkspaceLease = { workspacePath: normalizedPath, sessionId, taskId, provider, mode };

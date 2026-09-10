@@ -6,11 +6,11 @@
 
 ### Manager
 
-Manager 是 IlMatto 的双层 Agent 入口。它接收用户请求，在陪伴回复与 Coding Agent 委派之间进行路由。Manager 本身不负责读取或修改项目代码。
+Manager 是 IlMatto 的统一 Agent 入口。它将用户请求交给同一个 Antigravity 会话处理陪伴回复、项目分析和本地操作。
 
 ### 主 Agent / Coordinator
 
-主 Agent 是 Manager 的陪伴与协调角色，可由 Antigravity 或 OpenAI-compatible API 提供。它负责角色化的普通对话、情绪回应、需求澄清和任务路由；它不应访问工作区、生成实现方案或执行工具。
+主 Agent 是 Manager 的陪伴与执行角色，由 Antigravity 提供。它负责角色化的普通对话、情绪回应、需求澄清、项目分析和本地工具调用。
 
 ### CompanionProfile
 
@@ -22,11 +22,11 @@ CompanionProfile 是一次 Manager 对话使用的角色卡快照，活动字段
 
 ### Coding Agent / Coding Worker
 
-Coding Agent 是实际的技术执行角色，可由 Pi 或 Codex 提供。它负责检查项目、做技术判断、修改文件、运行验证以及执行受控的本地 Git 操作。
+独立 Pi 工作台中的 Coding Agent 是实际的技术执行角色。Manager 则由同一个 Antigravity 会话直接检查项目、做技术判断、修改文件和运行验证。
 
 ### 对话 / Session
 
-对话是用户在 IlMatto 中看到的持续交互单元，也是会话摘要的隔离边界。一个对话固定角色卡并可关联 Provider 自己的会话引用；Antigravity/Codex 的模型、推理强度以及对应的沙箱和审批选择来自全局设置，不按对话分叉。全局角色设定改变只影响新建对话；全局用户画像可被所有 Manager 对话读取。
+对话是用户在 IlMatto 中看到的持续交互单元，也是会话摘要的隔离边界。一个对话固定角色卡并可关联 Antigravity 会话引用；模型、推理强度以及对应的沙箱和审批选择来自全局设置，不按对话分叉。全局角色设定改变只影响新建对话；全局用户画像可被所有 Manager 对话读取。
 
 ### 摘要优先回忆
 
@@ -50,9 +50,8 @@ CodeTask 是提交给 Coding Agent 的原始用户任务。CodeResult 是 Coding
 
 ## 领域不变量
 
-- 主 Agent 的输出只能形成普通回答、澄清请求或路由动作，不能替代 Coding Agent 的技术判断。
-- 明确的本地文件、代码、编译、测试、命令或 Git 操作可以在进入主 Agent 前直接委派给 Coding Agent；一般技术知识问题仍可由主 Agent 回答。
-- 委派给 Coding Agent 时，必须保留用户原始请求；协调层生成的技术文字不能改写任务输入。
+- Manager 的 Antigravity 会话可直接形成普通回答、澄清请求、技术判断或本地操作。
+- 本地文件、代码、编译、测试、命令或 Git 操作与一般技术问题都在同一个 Manager 会话中处理，并保留用户原始请求。
 - Coding Agent 要么完成任务，要么以明确的失败、取消或阻塞状态结束。
 - 需要用户决定时，下一轮用户输入应继续当前 Coding 对话，而不是被当作新的无关任务。
 - 任何涉及文件写入、命令执行或 Git 写操作的行为都必须受审批策略控制；自动批准只扩大明确列出的安全范围。

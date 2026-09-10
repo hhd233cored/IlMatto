@@ -211,7 +211,8 @@ public sealed class ReservedMessagePresenter : ContentControl
         var version = ++_measurementVersion;
         _ = Dispatcher.BeginInvoke(() =>
         {
-            if (version != _measurementVersion || !RenderContent || !ReferenceEquals(entry, Message)) return;
+            if (version != _measurementVersion || PresentationSource.FromVisual(this) is null ||
+                !RenderContent || !ReferenceEquals(entry, Message)) return;
             NaturalHeightMeasured?.Invoke(this, new ChatMessageMeasuredEventArgs(entry, height, width));
         }, DispatcherPriority.Render);
     }

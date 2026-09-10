@@ -224,7 +224,6 @@ async function cleanupLegacyWorkspaceMcp(workspacePath, options) {
         const servers = config.mcpServers;
         if (!servers || typeof servers !== "object" || Array.isArray(servers))
             return;
-        const scriptPath = path.resolve(options.scriptPath);
         const remaining = { ...servers };
         let changed = false;
         for (const [name, value] of Object.entries(remaining)) {
@@ -232,7 +231,7 @@ async function cleanupLegacyWorkspaceMcp(workspacePath, options) {
                 continue;
             const entry = value;
             const args = entry.args;
-            const isGenerated = entry.command === path.resolve(options.command) && Array.isArray(args) && args[0] === scriptPath && args.includes("--session-id");
+            const isGenerated = entry.command === path.resolve(options.command) && Array.isArray(args) && isKnownIlMattoMcpScript(args[0], options) && args.includes("--session-id");
             if (isGenerated) {
                 delete remaining[name];
                 changed = true;
@@ -499,7 +498,15 @@ function isIlMattoGeneratedDefinition(value, options) {
         return false;
     const entry = value;
     const args = entry.args;
-    return entry.command === path.resolve(options.command) && Array.isArray(args) && args[0] === path.resolve(options.scriptPath) && args.includes("--session-id");
+    return entry.command === path.resolve(options.command) && Array.isArray(args) && isKnownIlMattoMcpScript(args[0], options) && args.includes("--session-id");
+}
+function isKnownIlMattoMcpScript(value, options) {
+    if (typeof value !== "string")
+        return false;
+    const scriptPath = path.resolve(value);
+    return scriptPath === path.resolve(options.scriptPath) ||
+        path.basename(scriptPath) === "agent-tools-mcp.js" ||
+        path.basename(scriptPath) === "codex-mcp.js";
 }
 /** Remove only files that older IlMatto ManagerHost versions generated.  The
  * unified runtime must not touch the selected workspace or arbitrary user

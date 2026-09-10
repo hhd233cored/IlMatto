@@ -31,7 +31,7 @@ export class WorkspaceLockManager {
         if (mode === "write") {
             const holder = this.writers.get(normalizedPath);
             if (holder && holder.taskId !== taskId)
-                throw new WorkspaceLockError("WORKSPACE_BUSY", `工作区正由 ${holder.provider === "codex" ? "Codex" : "Antigravity"} 任务 ${holder.taskId} 使用。`);
+                throw new WorkspaceLockError("WORKSPACE_BUSY", `工作区正由 Antigravity 任务 ${holder.taskId} 使用。`);
         }
         const lease = { workspacePath: normalizedPath, sessionId, taskId, provider, mode };
         this.leases.set(taskId, lease);

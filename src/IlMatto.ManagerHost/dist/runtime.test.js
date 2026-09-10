@@ -96,7 +96,7 @@ test("session cleanup removes owned memory and attachment copies but not the sha
         await rm(localAppData, { recursive: true, force: true });
     }
 });
-test("unified runtime mounts the Codex MCP in the global Antigravity config", async () => {
+test("unified runtime mounts the Agent Tools MCP in the global Antigravity config", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-global-mcp-workspace-"));
     const runtimeRoot = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-global-mcp-runtime-"));
     const globalConfigPath = path.join(runtimeRoot, ".gemini", "config", "mcp_config.json");
@@ -153,7 +153,7 @@ test("global Agent Tools mount removes only a generated legacy Codex entry", asy
         await rm(runtimeRoot, { recursive: true, force: true });
     }
 });
-test("unified runtime mounts a workspace-local Codex MCP plugin and removes only its own entry", async () => {
+test("unified runtime mounts a workspace-local Agent Tools MCP plugin and removes only its own entry", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-mcp-workspace-"));
     const runtimeRoot = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-mcp-runtime-"));
     const previousRuntime = process.env.ILMATTO_MANAGER_RUNTIME;
@@ -276,7 +276,7 @@ test("unified runtime removes only stale IlMatto entries from the legacy workspa
                 "ilmatto-codex-observation-stale": { command: process.execPath, args: [path.resolve(process.cwd(), "dist", "codex-mcp.js"), "--pipe", "old", "--session-id", "old"], cwd: workspace },
             } }), "utf8");
         const runtime = await ensureUnifiedManagerRuntime(workspace, undefined, {
-            mcp: { command: process.execPath, scriptPath: path.resolve(process.cwd(), "dist", "codex-mcp.js"), pipeName: "new", sessionId: "session-1", scope: "workspace-plugin" },
+            mcp: { command: process.execPath, scriptPath: path.resolve(process.cwd(), "dist", "agent-tools-mcp.js"), pipeName: "new", sessionId: "session-1", scope: "workspace-plugin" },
         });
         const cleaned = JSON.parse(await readFile(legacyConfigPath, "utf8"));
         assert.deepEqual(cleaned.mcpServers, { userServer: { command: "user-mcp" } });

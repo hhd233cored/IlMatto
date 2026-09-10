@@ -39,7 +39,7 @@ internal sealed class ChatMessageLayoutCache
             cached = new EntryHeights();
             _entries.Add(entry, cached);
         }
-        cached.Measured[GetWidthBucket(width)] = Math.Clamp(height, 24, 12000);
+        cached.Measured[GetWidthBucket(width)] = height;
     }
 
     public void ImportMeasuredHeights(
@@ -143,10 +143,14 @@ internal sealed class ChatTimelineLayoutIndex
         var sameEntries = _entries.Count == entries.Count && _entries.SequenceEqual(entries);
         if (sameEntries && _widthBucket == bucket) return false;
 
+        var previousHeights = _widthBucket == bucket
+            ? _entries.Select((entry, index) => (entry, height: _heights[index])).ToDictionary(item => item.entry, item => item.height)
+            : new Dictionary<ManagerChatEntry, double>();
         _entries.Clear();
         _entries.AddRange(entries);
         _heights.Clear();
-        foreach (var entry in entries) _heights.Add(_cache.GetHeight(entry, width));
+        foreach (var entry in entries)
+            _heights.Add(previousHeights.TryGetValue(entry, out var previous) ? previous : _cache.GetHeight(entry, width));
         _tree = new FenwickTree(_heights);
         _widthBucket = bucket;
         _cache.ForgetMissingEntries(entries.ToHashSet());
@@ -165,7 +169,9 @@ internal sealed class ChatTimelineLayoutIndex
         if (index < 0 || index >= _heights.Count || !double.IsFinite(measuredHeight) || measuredHeight < 24) return 0;
         var entry = _entries[index];
         _cache.RecordMeasuredHeight(entry, width, measuredHeight);
-        var newHeight = _cache.GetHeight(entry, width);
+        // Active rows cannot be persisted yet, but their actual height still
+        // belongs in the live scroll index instead of a text-length estimate.
+        var newHeight = measuredHeight;
         var delta = newHeight - _heights[index];
         if (Math.Abs(delta) < 0.5) return 0;
         _heights[index] = newHeight;
@@ -178,12 +184,10 @@ internal sealed class ChatTimelineLayoutIndex
         var index = IndexOf(entry);
         if (index < 0) return 0;
         _cache.Invalidate(entry);
-        var newHeight = _cache.GetHeight(entry, width);
-        var delta = newHeight - _heights[index];
-        if (Math.Abs(delta) < 0.5) return 0;
-        _heights[index] = newHeight;
-        _tree.Add(index, delta);
-        return delta;
+        // Keep the last real geometry until the next natural measurement.
+        // Replacing it with an estimate on every text/completion notification
+        // makes the extent jump twice for one content change.
+        return 0;
     }
 
     public int FindIndexAtOffset(double offset)

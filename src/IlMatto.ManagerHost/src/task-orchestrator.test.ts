@@ -3,8 +3,8 @@ import { test } from "node:test";
 import { ExecutionLease, defaultExecutorFor, parseExecutorDirective, redactAndLimit } from "./task-orchestrator.js";
 
 test("executor directives apply only at the start of a task", () => {
-  assert.deepEqual(parseExecutorDirective(" @codex 修复测试"), { executor: "codex", request: "修复测试" });
-  assert.deepEqual(parseExecutorDirective("请问 Codex 能否修复测试"), { request: "请问 Codex 能否修复测试" });
+  assert.deepEqual(parseExecutorDirective(" @antigravity 修复测试"), { executor: "antigravity", request: "修复测试" });
+  assert.deepEqual(parseExecutorDirective("请问某个编码 Agent 能否修复测试"), { request: "请问某个编码 Agent 能否修复测试" });
   assert.equal(defaultExecutorFor("antigravity"), "antigravity");
   assert.equal(defaultExecutorFor("openai_compatible"), "pi");
 });

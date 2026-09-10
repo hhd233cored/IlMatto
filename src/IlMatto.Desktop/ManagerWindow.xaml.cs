@@ -34,6 +34,9 @@ public partial class ManagerWindow : Window
     private readonly bool _useAirBubbleTimeline;
     private readonly ManagerLayoutCacheRecorder _layoutCacheRecorder;
     private bool _synchronizingInputEditor;
+    private bool _inputEditorSyncQueued;
+    private bool _closing;
+    private bool _closeReady;
 
     public ManagerWindow()
     {
@@ -349,21 +352,34 @@ public partial class ManagerWindow : Window
         if (_synchronizingInputEditor) return;
 
         // The visible editor is the RichTextBox inside BorderlessEmojiTextBoxTemplate.
-        // Sync from that source directly so typing does not depend on a later
-        // ComboBox click/FocusLost to enable Send.
         if (DataContext is not ManagerViewModel viewModel || sender is not Emoji.Wpf.RichTextBox editor)
             return;
 
-        var text = editor.Text ?? "";
-        if (string.IsNullOrEmpty(text) && !string.IsNullOrEmpty(viewModel.InputText) &&
-            !editor.IsKeyboardFocusWithin && !InputTextBox.IsKeyboardFocusWithin)
+        // Emoji.Wpf raises TextChanged before its overridden handler has
+        // written the normalized value back to the custom Text dependency
+        // property. Reading editor.Text synchronously therefore returns the
+        // previous value (the first typed character is missed). Run once after
+        // the current dispatcher operation so the command sees the complete
+        // text immediately, including a one-character draft.
+        if (_inputEditorSyncQueued) return;
+        _inputEditorSyncQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
         {
-            viewModel.SendCommand.NotifyCanExecuteChanged();
-            return;
-        }
-        if (!string.Equals(viewModel.InputText, text, StringComparison.Ordinal))
-            viewModel.InputText = text;
-        viewModel.SendCommand.NotifyCanExecuteChanged();
+            _inputEditorSyncQueued = false;
+            if (_synchronizingInputEditor || DataContext is not ManagerViewModel currentViewModel)
+                return;
+
+            var text = editor.Text ?? "";
+            if (string.IsNullOrEmpty(text) && !string.IsNullOrEmpty(currentViewModel.InputText) &&
+                !editor.IsKeyboardFocusWithin && !InputTextBox.IsKeyboardFocusWithin)
+            {
+                currentViewModel.SendCommand.NotifyCanExecuteChanged();
+                return;
+            }
+            if (!string.Equals(currentViewModel.InputText, text, StringComparison.Ordinal))
+                currentViewModel.InputText = text;
+            currentViewModel.SendCommand.NotifyCanExecuteChanged();
+        }));
     }
 
     private void SynchronizeInputEditor(ManagerViewModel viewModel)
@@ -695,16 +711,41 @@ public partial class ManagerWindow : Window
         }
     }
 
-    protected override async void OnClosed(EventArgs e)
+    protected override async void OnClosing(CancelEventArgs e)
     {
+        base.OnClosing(e);
+        if (_closeReady || e.Cancel) return;
+        e.Cancel = true;
+        if (_closing) return;
+        _closing = true;
         _followTimer.Stop();
         _piWorkbench?.Close();
+        // Keep the dispatcher alive until the detached transcript write and
+        // Host shutdown complete. Awaiting in OnClosed is too late: WPF can
+        // already be shutting down when its last window has closed.
+        Hide();
+        try
+        {
+            if (DataContext is ManagerViewModel model) await model.DisposeAsync();
+            _closeReady = true;
+            Close();
+        }
+        catch (Exception exception)
+        {
+            _closing = false;
+            Show();
+            System.Windows.MessageBox.Show(this, $"会话未能保存，窗口已保留。请恢复文件访问后再次关闭。\n{exception.Message}",
+                "无法完成关闭", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
         if (DataContext is ManagerViewModel viewModel)
         {
             viewModel.PropertyChanged -= ViewModelOnPropertyChanged;
             viewModel.SettingsRequested -= OpenSettings; viewModel.OpenPiWorkbenchRequested -= OpenPiWorkbench;
-        viewModel.UserMessageSent -= UserMessageSent;
-        await viewModel.DisposeAsync();
+            viewModel.UserMessageSent -= UserMessageSent;
         }
         base.OnClosed(e);
     }

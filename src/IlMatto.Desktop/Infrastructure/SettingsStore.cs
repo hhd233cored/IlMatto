@@ -30,13 +30,6 @@ public sealed class AppSettings
     /// <summary>approval, safe_tests, or autonomous for the isolated coding executor.</summary>
     public string AntigravityExecutionPolicy { get; set; } = "approval";
     public int TaskTraceRetentionDays { get; set; } = 30;
-    public string CodexCliPath { get; set; } = FindCodexCli();
-    public string CodexModel { get; set; } = "";
-    public string CodexEffort { get; set; } = "medium";
-    /// <summary>Codex native approval policy plus IlMatto's always auto-accept extension.</summary>
-    public string CodexApprovalPolicy { get; set; } = "on-request";
-    /// <summary>Native Codex sandbox mode: read-only, workspace-write, or danger-full-access.</summary>
-    public string CodexSandboxMode { get; set; } = "workspace-write";
     public string UserId { get; set; } = "用户";
     public string UserAvatarPath { get; set; } = "";
     public string AgentAvatarPath { get; set; } = "";
@@ -46,21 +39,6 @@ public sealed class AppSettings
     public string LastManagerSessionId { get; set; } = "";
     public ManagerCompanionProfile DefaultCompanionProfile { get; set; } = new();
 
-    internal static string FindCodexCli()
-    {
-        try
-        {
-            var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenAI", "Codex", "bin");
-            if (Directory.Exists(root))
-            {
-                var candidate = Directory.EnumerateFiles(root, "codex.exe", SearchOption.AllDirectories)
-                    .OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
-                if (!string.IsNullOrWhiteSpace(candidate)) return candidate;
-            }
-        }
-        catch { }
-        return "codex";
-    }
 }
 
 public static class SettingsStore
@@ -78,31 +56,12 @@ public static class SettingsStore
         {
             if (!File.Exists(SettingsPath)) return new AppSettings();
             var settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath), JsonOptions) ?? new AppSettings();
-            // Codex Desktop stores versioned binaries below
-            // %LOCALAPPDATA%\\OpenAI\\Codex\\bin. A client update can remove
-            // the directory referenced by an older IlMatto setting, leaving a
-            // stale absolute path that later fails with ENOENT. Re-discover a
-            // current binary at load time while preserving user-specified PATH
-            // commands and custom relative values.
-            if (IsMissingAbsolutePath(settings.CodexCliPath))
-            {
-                var discovered = AppSettings.FindCodexCli();
-                if (!string.Equals(discovered, "codex", StringComparison.OrdinalIgnoreCase))
-                    settings.CodexCliPath = discovered;
-            }
             return settings;
         }
         catch
         {
             return new AppSettings();
         }
-    }
-
-    private static bool IsMissingAbsolutePath(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return false;
-        try { return Path.IsPathRooted(value) && !File.Exists(value); }
-        catch { return false; }
     }
 
     public static void Save(AppSettings settings)

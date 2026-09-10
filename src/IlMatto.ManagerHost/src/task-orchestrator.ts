@@ -10,11 +10,11 @@ export type ParsedExecutorDirective = {
 
 /**
  * Task routing is deliberately deterministic.  A directive must be the first
- * standalone token; prose such as “could Codex help?” is ordinary text and
+ * standalone token; prose that merely mentions a provider is ordinary text and
  * never changes the executing provider silently.
  */
 export function parseExecutorDirective(input: string): ParsedExecutorDirective {
-  const match = /^\s*@(?<provider>antigravity|pi|codex)(?=\s|$)\s*/i.exec(input);
+  const match = /^\s*@(?<provider>antigravity|pi)(?=\s|$)\s*/i.exec(input);
   if (!match?.groups?.provider) return { request: input };
   return { executor: match.groups.provider.toLowerCase() as TaskExecutor, request: input.slice(match[0].length) };
 }

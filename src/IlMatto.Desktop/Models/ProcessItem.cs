@@ -115,7 +115,7 @@ public partial class ProcessItem : ObservableObject
 
     /// <summary>
     /// Operation headers are metadata labels, not assistant prose. Render them
-    /// as a compact plain-text preview so Markdown markers from Codex thinking
+    /// as a compact plain-text preview so Markdown markers from agent thinking
     /// summaries cannot leak into the collapsed row or break truncation.
     /// </summary>
     private static string NormalizePreview(string? value)
