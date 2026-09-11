@@ -109,20 +109,39 @@ public partial class ManagerWindow : Window
             MinWidth = 320,
             Margin = new Thickness(0, 8, 0, 14),
             MaxLength = 120,
+            FontSize = 14,
+            Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(23, 32, 51)),
+            Background = System.Windows.Media.Brushes.White,
+            BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(216, 222, 231)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(10, 8, 10, 8),
         };
         var dialog = new Window
         {
             Owner = this,
             Title = "重命名会话",
-            Width = 400,
-            Height = 160,
+            Width = 440,
+            Height = 218,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             ResizeMode = ResizeMode.NoResize,
             ShowInTaskbar = false,
             WindowStyle = WindowStyle.ToolWindow,
+            Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(245, 246, 248)),
         };
-        var saveButton = new System.Windows.Controls.Button { Content = "保存", IsDefault = true, MinWidth = 72, Padding = new Thickness(12, 5, 12, 5) };
-        var cancelButton = new System.Windows.Controls.Button { Content = "取消", IsCancel = true, MinWidth = 72, Padding = new Thickness(12, 5, 12, 5), Margin = new Thickness(8, 0, 0, 0) };
+        var saveButton = new System.Windows.Controls.Button
+        {
+            Content = "保存",
+            IsDefault = true,
+            MinWidth = 84,
+            Style = (Style)Resources["PrimaryButton"],
+        };
+        var cancelButton = new System.Windows.Controls.Button
+        {
+            Content = "取消",
+            IsCancel = true,
+            MinWidth = 84,
+            Style = (Style)Resources["IconButton"],
+        };
         saveButton.Click += (_, _) =>
         {
             if (string.IsNullOrWhiteSpace(input.Text))
@@ -135,14 +154,34 @@ public partial class ManagerWindow : Window
             dialog.DialogResult = true;
         };
 
-        var buttons = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, HorizontalAlignment = System.Windows.HorizontalAlignment.Right };
-        buttons.Children.Add(saveButton);
+        var buttons = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+        };
         buttons.Children.Add(cancelButton);
-        var content = new StackPanel { Margin = new Thickness(18) };
-        content.Children.Add(new TextBlock { Text = "会话标题", Foreground = System.Windows.Media.Brushes.DimGray });
+        buttons.Children.Add(saveButton);
+        saveButton.Margin = new Thickness(8, 0, 0, 0);
+
+        var content = new StackPanel { Margin = new Thickness(20, 16, 20, 16) };
+        content.Children.Add(new TextBlock
+        {
+            Text = "会话名称",
+            Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(39, 50, 68)),
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+        });
         content.Children.Add(input);
         content.Children.Add(buttons);
-        dialog.Content = content;
+        dialog.Content = new Border
+        {
+            Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(248, 249, 251)),
+            BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(224, 229, 236)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(12),
+            Margin = new Thickness(8),
+            Child = content,
+        };
         dialog.Loaded += (_, _) => { input.Focus(); input.SelectAll(); };
         dialog.ShowDialog();
     }

@@ -766,7 +766,7 @@
           <TextBlock Text="会话" Foreground="#758195" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
           <TextBlock DockPanel.Dock="Right" Text="{Binding Conversations.Count, StringFormat={}{0}}" Foreground="#A1AAB7" FontSize="11" VerticalAlignment="Center"/>
         </DockPanel>
-        <ListBox Grid.Row="3" ItemsSource="{Binding Conversations}" SelectedItem="{Binding SelectedConversation}" ItemContainerStyle="{StaticResource HistoryItem}" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+        <ListBox Grid.Row="3" ItemsSource="{Binding Conversations}" SelectedItem="{Binding SelectedConversation}" ItemContainerStyle="{StaticResource HistoryItem}" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.CanContentScroll="False">
           <ListBox.ItemTemplate>
             <DataTemplate>
               <Grid Margin="7,7">
