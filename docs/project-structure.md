@@ -131,7 +131,9 @@ ManagerHost 是独立的 TypeScript/Node.js 进程。它只维护一个活动的
 | `src/antigravity-sdk.ts` | 启动 Python SDK Bridge、转发 NDJSON、接收流式文本/状态/结构化结果，并管理 SDK 会话目录。 |
 | `src/antigravity-interactive.ts` | 通过桌面反向协议驱动隐藏交互式 CLI，解析终端输出并校验 ManagerAction。 |
 | `src/coordinator.ts` | 旧 API Coordinator 的兼容实现，仅供旧会话迁移测试使用，不是统一 Manager 的运行路径。 |
-| `src/agent-tools-mcp.ts` | 面向 Antigravity 的本地 IlMatto Agent Tools MCP 壳，提供 `session_search`、`session_open`、`session_update`、`profile_update`。 |
+| `src/agent-tools-mcp.ts` | 面向 Antigravity 的本地 IlMatto Agent Tools MCP 壳，提供 `session_search`、`session_open`、`session_read_page`、`session_update`、`profile_update`。 |
+| `src/browser-controller.ts` | 管理独立 headed Chrome 的生命周期、单会话锁、人工验证状态和按会话 Browser MCP 权限。 |
+| `src/browser-mcp.ts` | 通过固定版本 Playwright CDP 客户端提供交互式 Browser MCP；高风险工具由桌面端权限列表控制。 |
 | `src/*.test.ts` | Antigravity 文本流、单进程生命周期、协议兼容和 Host 集成测试。 |
 
 ### 5.1.1 Antigravity CLI 通道

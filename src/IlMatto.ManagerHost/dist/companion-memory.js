@@ -9,6 +9,9 @@ export const MAX_KEYWORDS = 20;
 export const MAX_SEARCH_RESULTS = 5;
 export const MAX_SNIPPETS = 3;
 export const MAX_SNIPPET_CHARS = 6_000;
+export const DEFAULT_READ_PAGE_LIMIT = 10;
+export const MAX_READ_PAGE_LIMIT = 20;
+export const MAX_READ_PAGE_CHARS = 16_000;
 const PROFILE_SECTION_HEADINGS = {
     basic: "基本信息",
     interests: "兴趣",
@@ -158,25 +161,7 @@ export class CompanionMemoryStore {
     }
     async openSession(sessionId, query) {
         const safeId = safeSessionId(sessionId);
-        const transcriptPath = path.join(this.getSessionDirectory(safeId), "transcript.jsonl");
-        let entries = [];
-        try {
-            const raw = await readFile(transcriptPath, "utf8");
-            entries = raw.split(/\r?\n/).filter(Boolean).flatMap((line) => {
-                try {
-                    const entry = JSON.parse(line);
-                    return isTranscriptEntry(entry) ? [entry] : [];
-                }
-                catch {
-                    // A process interrupted during append must not hide all earlier
-                    // visible transcript lines from a later bounded lookup.
-                    return [];
-                }
-            });
-        }
-        catch {
-            return { sessionId: safeId, snippets: [], truncated: false };
-        }
+        const entries = await this.readTranscriptEntries(safeId);
         const queryText = normalizeSearchText(query);
         const terms = searchTerms(queryText);
         const hits = entries.map((entry, index) => ({ entry, index, score: scoreSearch(queryText, terms, normalizeSearchText(entry.text), entry.createdAt) }))
@@ -202,6 +187,93 @@ export class CompanionMemoryStore {
             usedChars += boundedMessages.reduce((total, message) => total + message.text.length, 0);
         }
         return { sessionId: safeId, snippets, truncated: hits.length > snippets.length };
+    }
+    async readSessionPage(sessionId, cursor, limit = DEFAULT_READ_PAGE_LIMIT) {
+        const safeId = safeSessionId(sessionId);
+        const entries = await this.readTranscriptEntries(safeId);
+        const pageLimit = Math.max(1, Math.min(MAX_READ_PAGE_LIMIT, Math.trunc(limit)));
+        const position = cursor ? decodeTranscriptCursor(cursor, safeId) : { entryIndex: 0, offset: 0 };
+        if (position.entryIndex > entries.length || position.offset < 0)
+            throw new MemoryStoreError("INVALID_CURSOR", "会话全文游标无效或已过期。");
+        if (position.entryIndex === entries.length)
+            return { sessionId: safeId, messages: [], hasMore: false };
+        const messages = [];
+        let entryIndex = position.entryIndex;
+        let offset = position.offset;
+        let usedCharacters = 0;
+        let nextCursor;
+        while (entryIndex < entries.length && messages.length < pageLimit) {
+            const entry = entries[entryIndex];
+            if (offset >= entry.text.length) {
+                entryIndex += 1;
+                offset = 0;
+                continue;
+            }
+            const remaining = entry.text.length - offset;
+            const available = MAX_READ_PAGE_CHARS - usedCharacters;
+            if (available <= 0 && messages.length > 0)
+                break;
+            const chunkLength = Math.min(remaining, Math.max(1, available));
+            const isChunked = chunkLength < remaining;
+            messages.push({
+                ...entry,
+                text: entry.text.slice(offset, offset + chunkLength),
+                ...(offset > 0 ? { continued: true } : {}),
+                ...(isChunked ? { truncated: true } : {}),
+            });
+            usedCharacters += chunkLength;
+            if (isChunked) {
+                nextCursor = encodeTranscriptCursor({ version: 1, sessionId: safeId, entryIndex, offset: offset + chunkLength });
+                break;
+            }
+            entryIndex += 1;
+            offset = 0;
+        }
+        if (!nextCursor && entryIndex < entries.length) {
+            nextCursor = encodeTranscriptCursor({ version: 1, sessionId: safeId, entryIndex, offset });
+        }
+        return { sessionId: safeId, messages, ...(nextCursor ? { nextCursor } : {}), hasMore: Boolean(nextCursor) };
+    }
+    async readTranscriptEntries(sessionId) {
+        const transcriptPath = path.join(this.getSessionDirectory(sessionId), "transcript.jsonl");
+        try {
+            const raw = await readFile(transcriptPath, "utf8");
+            return raw.split(/\r?\n/).filter(Boolean).flatMap((line) => {
+                try {
+                    const entry = JSON.parse(line);
+                    return isTranscriptEntry(entry) ? [entry] : [];
+                }
+                catch {
+                    // An interrupted append must not hide earlier complete transcript lines.
+                    return [];
+                }
+            });
+        }
+        catch {
+            return [];
+        }
+    }
+}
+class MemoryStoreError extends Error {
+    code;
+    constructor(code, message) {
+        super(message);
+        this.code = code;
+    }
+}
+function encodeTranscriptCursor(cursor) {
+    return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+function decodeTranscriptCursor(value, sessionId) {
+    try {
+        const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+        if (parsed.version !== 1 || parsed.sessionId !== sessionId || !Number.isInteger(parsed.entryIndex) || !Number.isInteger(parsed.offset) ||
+            parsed.entryIndex < 0 || parsed.offset < 0)
+            throw new Error();
+        return { entryIndex: parsed.entryIndex, offset: parsed.offset };
+    }
+    catch {
+        throw new MemoryStoreError("INVALID_CURSOR", "会话全文游标无效或已过期。");
     }
 }
 export function safeSessionId(value) {

@@ -37,7 +37,7 @@ WPF 启动时会同时寻找 `ManagerHost/dist/index.js` 和按需使用的 `Age
 3. Manager 使用 `--mode accept-edits` 与 `--dangerously-skip-permissions`。它可以执行命令、修改或删除文件、访问网络以及使用本机配置的 MCP/插件；请把工作区视为可被自动操作的目录。Host 只转发文本、进度、工具状态和错误。
 4. 通过“视图 → Pi Coding 工作台”可按需打开原有 Pi 界面；关闭它不会影响 Manager 会话。
 
-ManagerHost 会在 Antigravity 用户级全局配置 `%USERPROFILE%\.gemini\config\mcp_config.json` 中临时写入带会话后缀的 `ilmatto-agent-tools-*`（保留原有 MCP Server）。该本地 MCP 壳只提供 `session_search`、`session_open`、`session_update` 和 `profile_update` 四个会话记忆工具；条目指向当前 ManagerHost 的本地管道，会话正常结束时只删除自身且未被修改的条目。它不提供 Codex 控制、任务草稿、报告读取或图片识别工具。
+ManagerHost 会在 Antigravity 用户级全局配置 `%USERPROFILE%\.gemini\config\mcp_config.json` 中临时写入带会话后缀的 `ilmatto-agent-tools-*` 和 `ilmatto-browser-*`（保留原有 MCP Server）。前者只提供 `session_search`、`session_open`、`session_read_page`、`session_update` 和 `profile_update` 五个会话记忆工具；后者是独立的轻量 Browser MCP，提供标签页、导航、快照、元素操作、滚动、截图，以及可在设置中开启的文件上传、文件下载、页面 JavaScript、坐标级鼠标和键盘操作。导航、点击、填写、按键、滚动和截图默认允许；上传、下载、evaluate 和坐标操作默认关闭。两个条目都指向当前 ManagerHost 的本地管道，会话正常结束时只删除自身且未被修改的条目。Browser MCP 首次调用时才启动独立 headed Chrome，窗口默认立即显示，并使用 `%LocalAppData%\IlMatto\browser-profile`，不接触用户日常 Chrome Profile；不提供 Codex 控制、视觉识图或浏览器扩展控制。详见 [Browser MCP 说明](docs/browser-mcp.md)。
 
 MCP Facade 的手动入口（主要用于诊断；正常 Manager 会话会自动挂载）：
 
@@ -45,6 +45,8 @@ MCP Facade 的手动入口（主要用于诊断；正常 Manager 会话会自动
 cd C:\Users\33612\Documents\GitHub\IlMatto\src\IlMatto.ManagerHost
 npm.cmd run build
 npm.cmd run mcp -- --pipe <ManagerHost管道名> --session-id <Manager会话ID>
+# 交互式浏览器 MCP（诊断入口；通常由 Antigravity 自动挂载）
+npm.cmd run browser-mcp -- --pipe <ManagerHost管道名> --session-id <Manager会话ID>
 ```
 
 原 Pi 工作台的使用方式保持不变：

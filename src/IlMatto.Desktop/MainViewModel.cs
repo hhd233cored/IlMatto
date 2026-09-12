@@ -272,7 +272,15 @@ public partial class MainViewModel : ObservableObject, IAsyncDisposable
         WorkspacePath = Path.GetFullPath(workspacePath);
         AutoApproveSafeCommands = autoApproveSafeCommands;
         AutoApproveGitOperations = autoApproveGitOperations;
-        SettingsStore.Save(new AppSettings { BaseUrl = BaseUrl, ModelId = ModelId, WorkspacePath = WorkspacePath, AutoApproveSafeCommands = AutoApproveSafeCommands, AutoApproveGitOperations = AutoApproveGitOperations });
+        // Update only the Pi workbench fields so newer Manager settings (for
+        // example Browser MCP permissions) survive a legacy settings save.
+        var settings = SettingsStore.Load();
+        settings.BaseUrl = BaseUrl;
+        settings.ModelId = ModelId;
+        settings.WorkspacePath = WorkspacePath;
+        settings.AutoApproveSafeCommands = AutoApproveSafeCommands;
+        settings.AutoApproveGitOperations = AutoApproveGitOperations;
+        SettingsStore.Save(settings);
         if (!string.IsNullOrWhiteSpace(ApiKey)) CredentialStore.Write(CredentialTarget, ApiKey);
         else CredentialStore.Delete(CredentialTarget);
         if (SelectedConversation is not null && !string.Equals(SelectedConversation.WorkspacePath, WorkspacePath, StringComparison.OrdinalIgnoreCase))

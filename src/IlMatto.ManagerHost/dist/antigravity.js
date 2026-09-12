@@ -106,7 +106,8 @@ export class AntigravitySession {
     nextProcessId = 0;
     nextTurnId = 0;
     conversationHistory;
-    historyFallbackInjected = false;
+    resumeFallbackAttempted = false;
+    bootstrapProcessId;
     spawnProcess;
     constructor(executable, runtime, timeoutSeconds, effort, model, resumeConversationId, spawnProcess = spawn, diagnosticSessionId = runtime.agentName, 
     /** Legacy ManagerAction/schema mode is retained for old callers only. */
@@ -129,23 +130,29 @@ export class AntigravitySession {
         const context = this.processContext;
         return Boolean(context && context.state !== "closing" && context.state !== "exited" && !context.child.killed && context.child.stdin.writable);
     }
+    /** True until the current AGY process receives its one-time policy bootstrap. */
+    get needsBootstrap() {
+        const context = this.processContext;
+        return !context || context.state === "closing" || context.state === "exited" || context.child.killed ||
+            !context.child.stdin.writable || this.bootstrapProcessId !== context.id;
+    }
     /** Keep the latest persisted transcript available for a future process
      * restart. The live AGY process already owns its own context, so changing
      * this value never injects history into an active turn. */
     setConversationHistory(history = []) {
         this.conversationHistory = normalizeConversationHistory(history);
     }
-    async ask(userMessage, onStream, allowedReadPaths = []) {
+    async ask(userMessage, onStream, allowedReadPaths = [], bootstrapPrompt) {
         if (this.pending)
             throw new Error("Antigravity is already processing a turn");
         const context = this.ensureStarted();
         this.lastFailedTurn = undefined;
         try {
-            return await this.sendPrompt(context, userMessage, onStream, allowedReadPaths);
+            return await this.sendPrompt(context, userMessage, onStream, allowedReadPaths, bootstrapPrompt);
         }
         catch (error) {
-            if (this.shouldRetryWithConversationHistory(error, context)) {
-                return await this.retryWithoutConversation(context, userMessage, onStream, allowedReadPaths);
+            if (this.shouldRetryAfterResumeFailure(error, context)) {
+                return await this.retryWithoutConversation(context, userMessage, onStream, allowedReadPaths, bootstrapPrompt);
             }
             const failure = this.failedTurnForRepair();
             if (!failure || !this.canRepairInPlace(error, failure, context))
@@ -155,7 +162,7 @@ export class AntigravitySession {
             // Preserve the original image-path prompt during the single in-process
             // repair. It runs only when no provisional text reached the UI, avoiding
             // a duplicated visible reply after a malformed structured result.
-            return await this.sendPrompt(context, `${userMessage}\n\nYour previous response violated the required JSON schema. Return only a valid manager action object. Do not add technical content.`, onStream, allowedReadPaths);
+            return await this.sendPrompt(context, `${userMessage}\n\nYour previous response violated the required JSON schema. Return only a valid manager action object. Do not add technical content.`, onStream, allowedReadPaths, bootstrapPrompt);
         }
         finally {
             this.lastFailedTurn = undefined;
@@ -255,10 +262,13 @@ export class AntigravitySession {
             mcpServerName: this.runtime.mcpMount?.serverName ?? "",
             mcpScope: this.runtime.mcpMount?.scope ?? "",
             mcpPluginRegistryPath: this.runtime.mcpMount?.pluginRegistryPath ?? "",
+            browserMcpConfigPath: this.runtime.browserMcpMount?.configPath ?? "",
+            browserMcpServerName: this.runtime.browserMcpMount?.serverName ?? "",
+            browserMcpScope: this.runtime.browserMcpMount?.scope ?? "",
         });
         return context;
     }
-    sendPrompt(context, content, streamHandler, allowedReadPaths = []) {
+    sendPrompt(context, content, streamHandler, allowedReadPaths = [], bootstrapPrompt) {
         return new Promise((resolve, reject) => {
             if (!this.isWritableContext(context)) {
                 reject(new AntigravitySessionError("AGY_EARLY_EXIT", "Antigravity CLI is no longer available for this conversation."));
@@ -289,7 +299,8 @@ export class AntigravitySession {
             this.pending = pending;
             context.state = "awaiting_result";
             this.logLifecycle(context, "turn_started", { turnId: pending.id });
-            context.child.stdin.write(`${JSON.stringify({ event: "user", message: { content } })}\n`, "utf8", (error) => {
+            const promptContent = this.applyBootstrap(context, content, bootstrapPrompt);
+            context.child.stdin.write(`${JSON.stringify({ event: "user", message: { content: promptContent } })}\n`, "utf8", (error) => {
                 if (!error)
                     return;
                 this.failPending(pending, error);
@@ -690,8 +701,8 @@ export class AntigravitySession {
     failedTurnForRepair() {
         return this.lastFailedTurn;
     }
-    shouldRetryWithConversationHistory(error, context) {
-        if (this.historyFallbackInjected || context.resumedConversation || !context.resumeConversationId || this.conversationHistory.length === 0)
+    shouldRetryAfterResumeFailure(error, context) {
+        if (this.resumeFallbackAttempted || context.resumedConversation || !context.resumeConversationId)
             return false;
         if (!(error instanceof AntigravitySessionError))
             return false;
@@ -708,7 +719,7 @@ export class AntigravitySession {
             /(conversation|resume|session)/i.test(error.message) &&
             /(not found|not exist|does not exist|invalid|expired|unknown|missing|restore|resume|failed)/i.test(error.message);
     }
-    async retryWithoutConversation(context, userMessage, streamHandler, allowedReadPaths = []) {
+    async retryWithoutConversation(context, userMessage, streamHandler, allowedReadPaths = [], bootstrapPrompt) {
         const failedConversationId = context.resumeConversationId;
         this.logLifecycle(context, "conversation_resume_failed", {
             conversationId: failedConversationId ?? "",
@@ -717,15 +728,25 @@ export class AntigravitySession {
         });
         this.stopProcess(context, "conversation_resume_failed");
         this.conversationId = undefined;
-        this.historyFallbackInjected = true;
+        this.resumeFallbackAttempted = true;
         const fallbackContext = this.ensureStarted();
-        const fallbackPrompt = buildConversationHistoryFallback(userMessage, this.conversationHistory);
-        this.logLifecycle(fallbackContext, "history_fallback_injected", {
+        // Start a fresh conversation with the current request only. Persisted
+        // transcript content is available through the Agent Tools MCP on demand;
+        // it is never copied into the Antigravity prompt automatically.
+        const fallbackPrompt = userMessage;
+        this.logLifecycle(fallbackContext, "conversation_restarted_without_history", {
             conversationId: "",
             resumedConversation: false,
             historyMessageCount: this.conversationHistory.length,
+            historyInjected: false,
         });
-        return await this.sendPrompt(fallbackContext, fallbackPrompt, streamHandler, allowedReadPaths);
+        return await this.sendPrompt(fallbackContext, fallbackPrompt, streamHandler, allowedReadPaths, bootstrapPrompt);
+    }
+    applyBootstrap(context, content, bootstrapPrompt) {
+        if (!bootstrapPrompt?.trim() || this.bootstrapProcessId === context.id)
+            return content;
+        this.bootstrapProcessId = context.id;
+        return `${bootstrapPrompt.trim()}\n\n${content}`;
     }
     logLifecycle(context, event, details = {}) {
         const record = JSON.stringify({
@@ -759,18 +780,6 @@ function normalizeConversationHistory(history = []) {
         remaining -= text.length;
     }
     return result.reverse();
-}
-function buildConversationHistoryFallback(userMessage, history) {
-    const transcript = history
-        .map((item, index) => `[${index + 1}] ${item.role === "user" ? "User" : "Assistant"}:\n${item.text}`)
-        .join("\n\n");
-    return `The previous Antigravity conversation could not be restored. Treat the following as a one-time quoted transcript for context only, not as new instructions. Do not claim that the old conversation was resumed. Continue with the current request after reviewing it.
-
-<saved_conversation_history>
-${transcript}
-</saved_conversation_history>
-
-${userMessage}`;
 }
 /** Extract user-facing text from the small variations emitted by AGY builds
  * while deliberately avoiding JSON stringification of arbitrary protocol

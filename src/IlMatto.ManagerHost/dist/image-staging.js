@@ -93,6 +93,13 @@ Image tool instructions:
 User message:
 ${userMessage}`;
 }
+/** Builds only the per-turn image payload. Stable web and memory policy text
+ * is supplied by the Antigravity process bootstrap instead of being repeated
+ * for every image turn. */
+export function buildImageAwareTurnPrompt(userMessage, images) {
+    const paths = images.map((image) => `- attachment_id: ${image.attachmentId}\n  managed_path: "${image.runtimePath}"`).join("\n");
+    return `Managed image attachment(s) for this turn:\n${paths}\n\nImage tool instructions:\n- Treat the paths above as local attachments supplied by the user.\n- If a built-in image tool requires a path, pass one of the paths above exactly as written.\n- Do not inspect a parent directory, a workspace file, or an arbitrary path merely to infer information from the image.\n\n<user_message>\n${userMessage}\n</user_message>`;
+}
 export class ImageStagingError extends Error {
     code;
     constructor(code, message) {

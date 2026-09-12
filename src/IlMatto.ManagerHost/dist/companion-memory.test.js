@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { CompanionMemoryStore, MAX_SNIPPET_CHARS, PROFILE_MAX_CHARS, SUMMARY_MAX_CHARS } from "./companion-memory.js";
+import { CompanionMemoryStore, MAX_READ_PAGE_CHARS, MAX_SNIPPET_CHARS, PROFILE_MAX_CHARS, SUMMARY_MAX_CHARS } from "./companion-memory.js";
 async function withStore(run) {
     const root = await mkdtemp(path.join(os.tmpdir(), "ilmatto-companion-memory-"));
     try {
@@ -94,6 +94,45 @@ test("session open returns no result when the transcript is unavailable", async 
     await withStore(async (store) => {
         const opened = await store.openSession("missing-session", "任何内容");
         assert.deepEqual(opened, { sessionId: "missing-session", snippets: [], truncated: false });
+    });
+});
+test("session read page returns committed transcript entries in bounded cursor pages", async () => {
+    await withStore(async (store) => {
+        await store.appendTranscript("paged", [
+            { role: "user", text: "第一条", createdAt: "2026-09-10T00:00:00Z" },
+            { role: "assistant", text: "第二条", createdAt: "2026-09-10T00:00:01Z" },
+            { role: "user", text: "第三条", createdAt: "2026-09-10T00:00:02Z" },
+        ]);
+        const first = await store.readSessionPage("paged", undefined, 1);
+        assert.deepEqual(first.messages.map((item) => item.text), ["第一条"]);
+        assert.equal(first.hasMore, true);
+        assert.ok(first.nextCursor);
+        const second = await store.readSessionPage("paged", first.nextCursor, 2);
+        assert.deepEqual(second.messages.map((item) => item.text), ["第二条", "第三条"]);
+        assert.equal(second.hasMore, false);
+    });
+});
+test("session read page ignores an interrupted final line and bounds long chunks", async () => {
+    await withStore(async (store, root) => {
+        const directory = path.join(root, "sessions", "partial");
+        await mkdir(directory, { recursive: true });
+        await writeFile(path.join(directory, "transcript.jsonl"), `${JSON.stringify({ role: "user", text: "已提交", createdAt: "2026-09-10T00:00:00Z" })}\n{"role":"assistant"}\n`, "utf8");
+        const first = await store.readSessionPage("partial");
+        assert.deepEqual(first.messages.map((item) => item.text), ["已提交"]);
+        await store.appendTranscript("partial", [{ role: "assistant", text: "x".repeat(MAX_READ_PAGE_CHARS + 100), createdAt: "2026-09-10T00:00:01Z" }]);
+        const long = await store.readSessionPage("partial", undefined, 20);
+        assert.equal(long.messages[1]?.truncated, true);
+        assert.ok((long.messages[1]?.text.length ?? 0) <= MAX_READ_PAGE_CHARS);
+        assert.equal(long.hasMore, true);
+    });
+});
+test("session read page rejects a cursor from another session", async () => {
+    await withStore(async (store) => {
+        await store.appendTranscript("cursor-a", [{ role: "user", text: "a", createdAt: "2026-09-10T00:00:00Z" }]);
+        await store.appendTranscript("cursor-b", [{ role: "user", text: "b", createdAt: "2026-09-10T00:00:00Z" }]);
+        const page = await store.readSessionPage("cursor-a", undefined, 1);
+        assert.equal(page.nextCursor, undefined);
+        await assert.rejects(() => store.readSessionPage("cursor-b", "not-a-valid-cursor"), /游标无效/);
     });
 });
 test("an unreadable profile degrades to an empty profile", async () => {

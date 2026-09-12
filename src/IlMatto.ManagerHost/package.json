@@ -8,10 +8,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test dist/**/*.test.js",
-    "mcp": "node dist/agent-tools-mcp.js"
+    "mcp": "node dist/agent-tools-mcp.js",
+    "browser-mcp": "node dist/browser-mcp.js"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "playwright-core": "1.55.0"
   }
 }

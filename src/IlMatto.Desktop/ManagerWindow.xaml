@@ -797,6 +797,11 @@
           </StackPanel>
         </StackPanel>
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
+            <Button Command="{Binding StartBrowserCommand}" Style="{StaticResource IconButton}" Width="36" Height="36" Padding="0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" ToolTip="{Binding BrowserButtonToolTip}" AutomationProperties.Name="打开浏览器">
+              <TextBlock Text="{Binding BrowserIconGlyph}" FontFamily="Segoe Fluent Icons" FontSize="17" Foreground="{Binding BrowserIconForeground}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Button>
+          </StackPanel>
           <Button Content="&#xE74C;" FontFamily="Segoe Fluent Icons" Command="{Binding OpenPiWorkbenchCommand}" Style="{StaticResource DrawerButton}" ToolTip="打开 Coding 工作台"/>
           <Button Content="&#xE71D;" FontFamily="Segoe Fluent Icons" Command="{Binding ToggleProcessDrawerCommand}" Style="{StaticResource DrawerButton}" ToolTip="Agent 过程"/>
         </StackPanel>

@@ -25,7 +25,7 @@ test("Agent Tools MCP exposes only companion-memory tools", async () => {
         const response = output.split("\n").map((line) => line.trim()).filter(Boolean)
             .map((line) => JSON.parse(line)).find((message) => message.id === 2);
         const names = response.result.tools.map((tool) => tool.name).sort();
-        assert.deepEqual(names, ["profile_update", "session_open", "session_search", "session_update"]);
+        assert.deepEqual(names, ["profile_update", "session_open", "session_read_page", "session_search", "session_update"]);
     }
     finally {
         child.kill();

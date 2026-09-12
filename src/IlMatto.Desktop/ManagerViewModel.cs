@@ -269,6 +269,10 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty] private long? managerContextTokens;
     [ObservableProperty] private long? managerContextWindow;
     [ObservableProperty] private bool isProcessDrawerOpen;
+    [ObservableProperty] private string browserState = "Stopped";
+    [ObservableProperty] private string browserStatusMessage = "";
+    [ObservableProperty] private bool browserVisible;
+    public BrowserPermissionSettings BrowserPermissions { get; private set; } = new();
 
     [ObservableProperty] private string defaultMainAgentProvider = "antigravity";
     [ObservableProperty] private string defaultCodingAgentProvider = "antigravity";
@@ -308,6 +312,41 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     public string ApiKey { get => PiApiKey; set => PiApiKey = value; }
     public ApprovalRequest? CurrentApproval => PendingApprovals.FirstOrDefault();
     public bool HasApproval => CurrentApproval is not null;
+    public bool BrowserRunning => BrowserState is not "Stopped" and not "Error";
+    // Keep the browser glyph stable and communicate lifecycle through its
+    // color. Segoe Fluent Icons does not provide a Chrome/Edge brand mark;
+    // E774 is the platform's generic web/browser glyph.
+    public string BrowserIconGlyph => "\uE774";
+    public string BrowserIconForeground => BrowserState is "AgentControlled" or "WaitingForHuman" or "HumanControlled" ? "#2EBD6B" : "#4B5563";
+    public string BrowserButtonToolTip
+    {
+        get
+        {
+            var action = BrowserState switch
+            {
+                "Starting" => "浏览器启动中",
+                "AgentControlled" => "显示专用浏览器",
+                "WaitingForHuman" => "显示浏览器并完成验证",
+                "HumanControlled" => "显示专用浏览器",
+                "Error" => "浏览器启动失败，点击重试",
+                _ => "启动专用浏览器",
+            };
+            return string.IsNullOrWhiteSpace(BrowserStatusMessage) ? action : $"{action}\n{BrowserStatusMessage}";
+        }
+    }
+    // Human verification is now acknowledged automatically by the next
+    // browser snapshot; the legacy HumanControlled state is retained on the
+    // wire but no longer requires a desktop confirmation button.
+    public bool BrowserNeedsHuman => BrowserState is "WaitingForHuman";
+    public string BrowserStatusLabel => BrowserState switch
+    {
+        "Starting" => "浏览器启动中",
+        "AgentControlled" => "浏览器运行中",
+        "WaitingForHuman" => "请在浏览器中完成验证",
+        "HumanControlled" => "人工接管中",
+        "Error" => "浏览器错误",
+        _ => "浏览器未启动",
+    };
     public string PendingApprovalCountLabel => PendingApprovals.Count > 1 ? $"另有 {PendingApprovals.Count - 1} 项等待确认" : "";
     public bool CanSend => !_isShuttingDown && !IsBusy && (!string.IsNullOrWhiteSpace(InputText) || PendingImageAttachments.Count > 0);
     public bool CanCancel => IsBusy;
@@ -619,6 +658,42 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     [RelayCommand] private async Task ApproveAsync() => await SubmitApprovalAsync(true);
     [RelayCommand] private async Task RejectAsync() => await SubmitApprovalAsync(false);
 
+    [RelayCommand]
+    private async Task StartBrowserAsync() => await SendBrowserControlAsync(new BrowserSetVisibilityMessage(SelectedConversation?.SessionId ?? "", true));
+
+    [RelayCommand]
+    private async Task StopBrowserAsync()
+    {
+        if (await SendBrowserControlAsync(new BrowserStopMessage(SelectedConversation?.SessionId ?? "")))
+        {
+            // Keep older desktop layouts (which may still expose the legacy
+            // stop command) responsive even if the asynchronous state event
+            // is delayed while taskkill is reaping Chrome.
+            BrowserState = "Stopped";
+            BrowserVisible = false;
+            BrowserStatusMessage = "浏览器已停止。";
+        }
+    }
+
+    [RelayCommand]
+    private async Task CompleteBrowserVerificationAsync() => await SendBrowserControlAsync(new BrowserHumanDoneMessage(SelectedConversation?.SessionId ?? ""));
+
+    private async Task<bool> SendBrowserControlAsync<T>(T message) where T : notnull
+    {
+        if (_isShuttingDown || SelectedConversation is null) return false;
+        try
+        {
+            await EnsureHostAsync();
+            await _pipe!.SendAsync(message);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            BrowserStatusMessage = $"浏览器操作失败：{exception.Message}";
+            return false;
+        }
+    }
+
     private async Task SubmitApprovalAsync(bool approved)
     {
         var request = CurrentApproval;
@@ -636,7 +711,10 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (approved && request.Kind == "mcp_url" && Uri.TryCreate(request.Url, UriKind.Absolute, out var uri))
             Process.Start(new ProcessStartInfo(uri.ToString()) { UseShellExecute = true });
         PendingApprovals.Remove(request); InteractionResponseText = ""; NotifyApprovalChanged();
-        await _pipe.SendAsync(new ApproveCodingToolMessage(request.SessionId, request.CallId, approved));
+        if (request.Kind == "browser_action")
+            await _pipe.SendAsync(new BrowserApproveActionMessage(request.SessionId, request.CallId, approved));
+        else
+            await _pipe.SendAsync(new ApproveCodingToolMessage(request.SessionId, request.CallId, approved));
     }
 
     [RelayCommand]
@@ -673,6 +751,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         // the ViewModel's pre-dialog value here; doing so made every role-card
         // edit appear to save successfully while persisting the old text.
         SettingsStore.Save(settings); LoadSettings(settings); PiApiKey = piApiKey; MainApiKey = mainApiKey;
+        _ = SyncBrowserPermissionsAsync();
     }
 
     public void OpenAntigravityLoginTerminal()
@@ -764,8 +843,18 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         conversation.SessionId, conversation.WorkspacePath,
         BuildMainConfig(conversation, true), BuildCodingConfig(conversation, true),
         conversation.Messages.LastOrDefault(message => message.CodeResult is not null)?.CodeResult is { NeedsUserDecision: true } or { Status: "blocked" },
-        conversation.CompanionProfile, BuildConversationHistory(conversation), BuildExecutorProfiles(conversation, true)));
+        conversation.CompanionProfile, BuildConversationHistory(conversation), BuildExecutorProfiles(conversation, true), BrowserPermissions));
         _hostStartedSessionIds.Add(conversation.SessionId);
+    }
+
+    private async Task SyncBrowserPermissionsAsync()
+    {
+        if (_isShuttingDown || _pipe is null) return;
+        foreach (var conversation in Conversations.Where(item => _hostStartedSessionIds.Contains(item.SessionId)))
+        {
+            try { await _pipe.SendAsync(new BrowserPermissionsUpdateMessage(conversation.SessionId, BrowserPermissions)); }
+            catch { /* a closing/disconnected Host will receive settings on its next start */ }
+        }
     }
 
     private async Task ActivateCachedSessionAsync(ManagerConversationItem conversation)
@@ -1141,12 +1230,39 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         if (conversation is null) return;
         if (!ReferenceEquals(conversation, SelectedConversation) && !_replayingBackgroundEvents)
         {
+            // BrowserController owns one application-level browser, so its
+            // lifecycle state is global even when the event belongs to a
+            // conversation that is currently in the background.
+            if (message.Type == "browser_state")
+            {
+                BrowserState = string.IsNullOrWhiteSpace(message.State) ? "Stopped" : message.State;
+                BrowserVisible = message.Visible == true;
+                BrowserStatusMessage = message.Message ?? "";
+                if (BrowserState == "WaitingForHuman") ManagerStatus = "需要人工验证";
+            }
             RecordBackgroundEvent(conversation, message);
             if (!IsStreamingEvent(message)) Save();
             return;
         }
         switch (message.Type)
         {
+            case "browser_state":
+                BrowserState = string.IsNullOrWhiteSpace(message.State) ? "Stopped" : message.State;
+                BrowserVisible = message.Visible == true;
+                BrowserStatusMessage = message.Message ?? "";
+                if (BrowserState == "WaitingForHuman") ManagerStatus = "需要人工验证";
+                break;
+            case "browser_approval_request":
+                AddApproval(new ApprovalRequest(
+                    conversation.SessionId,
+                    message.ActionId ?? message.CallId ?? "",
+                    message.Tool ?? "browser_action",
+                    message.Summary ?? "浏览器写操作需要确认",
+                    message.Details ?? "请确认浏览器操作。",
+                    null,
+                    "antigravity",
+                    "browser_action"));
+                break;
             case "manager_session_ready":
                 if (conversation.MainAgent is not null)
                 {
@@ -2364,6 +2480,8 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         WorkspacePath = settings.WorkspacePath; AutoApproveSafeCommands = settings.AutoApproveSafeCommands; AutoApproveGitOperations = settings.AutoApproveGitOperations;
         AntigravityCliPath = settings.AntigravityCliPath; AntigravityModel = settings.AntigravityModel; AntigravityEffort = settings.AntigravityEffort; AntigravityToolPermission = NormalizeAntigravityToolPermission(settings.AntigravityToolPermission); AntigravityTerminalSandbox = settings.AntigravityTerminalSandbox; AntigravityTimeoutSeconds = 0;
         AntigravityExecutionPolicy = settings.AntigravityExecutionPolicy is "safe_tests" or "autonomous" ? settings.AntigravityExecutionPolicy : "approval";
+        BrowserPermissions = settings.BrowserPermissions ?? new BrowserPermissionSettings();
+        OnPropertyChanged(nameof(BrowserPermissions));
         UserId = string.IsNullOrWhiteSpace(settings.UserId) ? "用户" : settings.UserId.Trim();
         UserAvatarPath = settings.UserAvatarPath?.Trim() ?? "";
         AgentAvatarPath = settings.AgentAvatarPath?.Trim() ?? "";
@@ -2464,6 +2582,19 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     partial void OnManagerCacheReadTokensChanged(long? value) => OnPropertyChanged(nameof(ManagerCacheLabel));
     partial void OnManagerContextTokensChanged(long? value) => OnPropertyChanged(nameof(ManagerContextLabel));
     partial void OnManagerContextWindowChanged(long? value) => OnPropertyChanged(nameof(ManagerContextLabel));
+    partial void OnBrowserStateChanged(string value)
+    {
+        OnPropertyChanged(nameof(BrowserRunning));
+        OnPropertyChanged(nameof(BrowserNeedsHuman));
+        OnPropertyChanged(nameof(BrowserStatusLabel));
+        OnPropertyChanged(nameof(BrowserIconForeground));
+        OnPropertyChanged(nameof(BrowserButtonToolTip));
+    }
+    partial void OnBrowserStatusMessageChanged(string value)
+    {
+        OnPropertyChanged(nameof(BrowserStatusLabel));
+        OnPropertyChanged(nameof(BrowserButtonToolTip));
+    }
 
     partial void OnSelectedModelProviderChanged(string value)
     {

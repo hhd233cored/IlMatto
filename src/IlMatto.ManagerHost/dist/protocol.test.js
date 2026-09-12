@@ -22,6 +22,27 @@ test("manager protocol validates strict routing messages", () => {
     assert.equal(isManagerClientMessage({ type: "list_agent_models", sessionId: "s", provider: "antigravity" }), true);
     assert.equal(isManagerClientMessage({ type: "list_agent_models", sessionId: "s", provider: "unsupported" }), false);
     assert.equal(isManagerClientMessage({ type: "list_agent_models", sessionId: "s", provider: "pi" }), false);
+    assert.equal(isManagerClientMessage({ type: "browser_request", sessionId: "s", requestId: "b1", operation: "browser_tabs" }), false);
+    assert.equal(isManagerClientMessage({ type: "browser_request", sessionId: "s", requestId: "b1", operation: "tabs" }), true);
+    assert.equal(isManagerClientMessage({ type: "browser_request", sessionId: "s", requestId: "b2", operation: "navigate", url: "https://example.test" }), true);
+    assert.equal(isManagerClientMessage({ type: "browser_request", sessionId: "s", requestId: "b3", operation: "navigate", url: "file:///secret" }), false);
+    assert.equal(isManagerClientMessage({ type: "browser_set_visibility", sessionId: "s", visible: true }), true);
+    assert.equal(isManagerClientMessage({ type: "browser_approve_action", sessionId: "s", actionId: "a", approved: false }), true);
+    assert.equal(isManagerClientMessage({
+        type: "browser_permissions_update", sessionId: "s",
+        browserPermissions: { navigate: true, click: true, upload: false, download: false, evaluate: false, coordinate: false },
+    }), true);
+    assert.equal(isManagerClientMessage({
+        type: "browser_permissions_update", sessionId: "s", browserPermissions: { unknown: true },
+    }), false);
+    assert.equal(isManagerClientMessage({
+        type: "browser_request", sessionId: "s", requestId: "b4", operation: "evaluate",
+        expression: "document.title", permission: "evaluate", write: true,
+    }), true);
+    assert.equal(isManagerClientMessage({
+        type: "browser_request", sessionId: "s", requestId: "b5", operation: "mouse",
+        x: "10", y: 20,
+    }), false);
 });
 test("managed image attachments preserve order and backfill legacy ids", () => {
     const attachments = normalizeManagerImageAttachments([
@@ -54,6 +75,14 @@ test("manager protocol accepts all provider combinations and generic interaction
         type: "start_manager_session", sessionId: "s", workspacePath: "C:\\repo", mainAgent: mainAgents[0], codingAgent: codingAgents[0],
         executorProfiles: { unsupported: codingAgents[0] },
     }), false);
+    assert.equal(isManagerClientMessage({
+        type: "start_manager_session", sessionId: "s", workspacePath: "C:\\repo", mainAgent: mainAgents[0], codingAgent: codingAgents[0],
+        browserPermissions: { navigate: true, click: true, upload: true, evaluate: false, coordinate: false },
+    }), true);
+    assert.equal(isManagerClientMessage({
+        type: "start_manager_session", sessionId: "s", workspacePath: "C:\\repo", mainAgent: mainAgents[0], codingAgent: codingAgents[0],
+        browserPermissions: { click: "yes" },
+    }), false);
     assert.equal(isManagerClientMessage({ type: "start_manager_session", sessionId: "s", workspacePath: "C:\\repo", mainAgent: { provider: "unknown" }, codingAgent: codingAgents[0] }), false);
 });
 test("manager protocol accepts companion memory patches on their matching operations", () => {
@@ -68,6 +97,13 @@ test("manager protocol accepts companion memory patches on their matching operat
     assert.equal(isManagerClientMessage({
         type: "companion_memory_request", sessionId: "memory-session", requestId: "bad-1", operation: "session_update",
         profilePatch: { section: "invalid", add: ["无效章节"] },
+    }), false);
+    assert.equal(isManagerClientMessage({
+        type: "companion_memory_request", sessionId: "memory-session", requestId: "read-1", operation: "session_read_page",
+        targetSessionId: "history-session", cursor: "opaque-cursor", limit: 20,
+    }), true);
+    assert.equal(isManagerClientMessage({
+        type: "companion_memory_request", sessionId: "memory-session", requestId: "read-2", operation: "session_read_page", limit: 21,
     }), false);
 });
 test("unified Antigravity start messages use the compact validated shape", () => {

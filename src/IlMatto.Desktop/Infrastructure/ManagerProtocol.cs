@@ -57,6 +57,7 @@ public sealed record StartManagerSessionMessage(
     [property: JsonPropertyName("companionProfile")] ManagerCompanionProfile? CompanionProfile = null,
     [property: JsonPropertyName("conversationHistory")] IReadOnlyList<ManagerCompanionHistoryMessage>? ConversationHistory = null,
     [property: JsonPropertyName("executorProfiles")] Dictionary<string, ManagerCodingAgentConfig>? ExecutorProfiles = null,
+    [property: JsonPropertyName("browserPermissions")] BrowserPermissionSettings? BrowserPermissions = null,
     [property: JsonPropertyName("type")] string Type = "start_manager_session");
 
 public sealed record ActivateManagerSessionMessage(
@@ -65,6 +66,12 @@ public sealed record ActivateManagerSessionMessage(
 
 public sealed record SendManagerMessage(string SessionId, string Text, IReadOnlyList<ManagerImageAttachmentMessage>? Attachments = null, string? Executor = null, [property: JsonPropertyName("generateTitle")] bool GenerateTitle = false, [property: JsonPropertyName("type")] string Type = "send_manager_message");
 public sealed record ApproveCodingToolMessage(string SessionId, string CallId, bool Approved, [property: JsonPropertyName("type")] string Type = "approve_coding_tool");
+public sealed record BrowserStartMessage(string SessionId, [property: JsonPropertyName("type")] string Type = "browser_start");
+public sealed record BrowserStopMessage(string SessionId, [property: JsonPropertyName("type")] string Type = "browser_stop");
+public sealed record BrowserSetVisibilityMessage(string SessionId, bool Visible, [property: JsonPropertyName("type")] string Type = "browser_set_visibility");
+public sealed record BrowserHumanDoneMessage(string SessionId, [property: JsonPropertyName("type")] string Type = "browser_human_done");
+public sealed record BrowserApproveActionMessage(string SessionId, string ActionId, bool Approved, [property: JsonPropertyName("type")] string Type = "browser_approve_action");
+public sealed record BrowserPermissionsUpdateMessage(string SessionId, BrowserPermissionSettings BrowserPermissions, [property: JsonPropertyName("type")] string Type = "browser_permissions_update");
 public sealed record CancelManagerTurnMessage(
     string SessionId,
     [property: JsonPropertyName("target")] string Target = "antigravity",
@@ -145,6 +152,11 @@ public sealed class ManagerHostEvent
     [JsonPropertyName("models")] public List<AgentModelInfo>? Models { get; init; }
     [JsonPropertyName("toolPermission")] public string? ToolPermission { get; init; }
     [JsonPropertyName("terminalSandbox")] public bool? TerminalSandbox { get; init; }
+    [JsonPropertyName("ownerSessionId")] public string? OwnerSessionId { get; init; }
+    [JsonPropertyName("profilePath")] public string? ProfilePath { get; init; }
+    [JsonPropertyName("cdpEndpoint")] public string? CdpEndpoint { get; init; }
+    [JsonPropertyName("visible")] public bool? Visible { get; init; }
+    [JsonPropertyName("actionId")] public string? ActionId { get; init; }
 }
 
 public sealed class ManagerTaskTraceEvent

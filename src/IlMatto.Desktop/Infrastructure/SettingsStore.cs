@@ -4,6 +4,20 @@ using IlMatto.Desktop.Models;
 
 namespace IlMatto.Desktop.Infrastructure;
 
+public sealed class BrowserPermissionSettings
+{
+    public bool Navigate { get; set; } = true;
+    public bool Click { get; set; } = true;
+    public bool Fill { get; set; } = true;
+    public bool Press { get; set; } = true;
+    public bool Scroll { get; set; } = true;
+    public bool Screenshot { get; set; } = true;
+    public bool Upload { get; set; }
+    public bool Download { get; set; }
+    public bool Evaluate { get; set; }
+    public bool Coordinate { get; set; }
+}
+
 public sealed class AppSettings
 {
     public string DefaultMainAgentProvider { get; set; } = "antigravity";
@@ -25,6 +39,8 @@ public sealed class AppSettings
     public string AntigravityToolPermission { get; set; } = "always-proceed";
     /// <summary>Whether Antigravity terminal commands run in the OS sandbox.</summary>
     public bool AntigravityTerminalSandbox { get; set; }
+    /// <summary>Allow-list for the optional Browser MCP operations.</summary>
+    public BrowserPermissionSettings BrowserPermissions { get; set; } = new();
     // Retained for settings compatibility; Antigravity turns are unbounded.
     public int AntigravityTimeoutSeconds { get; set; }
     /// <summary>approval, safe_tests, or autonomous for the isolated coding executor.</summary>

@@ -11,6 +11,7 @@ import { safeSessionId } from "./companion-memory.js";
  * names remain recognized so an upgrade can remove stale generated entries
  * without touching user-owned MCP servers. */
 const CURRENT_MCP_PREFIX = "ilmatto-agent-tools-";
+const BROWSER_MCP_PREFIX = "ilmatto-browser-";
 const LEGACY_MCP_PREFIX = "ilmatto-codex-observation-";
 const LEGACY_GLOBAL_MCP_NAME = "ilmatto-codex-observation";
 let mcpConfigQueue: Promise<void> = Promise.resolve();
@@ -25,7 +26,7 @@ async function withMcpConfigLock<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 function isGeneratedWorkspaceMcpName(name: string): boolean {
-  return name.startsWith(CURRENT_MCP_PREFIX) || name.startsWith(LEGACY_MCP_PREFIX);
+  return name.startsWith(CURRENT_MCP_PREFIX) || name.startsWith(BROWSER_MCP_PREFIX) || name.startsWith(LEGACY_MCP_PREFIX);
 }
 
 export type ManagerRuntime = {
@@ -44,8 +45,11 @@ export type ManagerRuntime = {
   agentPath: string;
   /** Temporary IlMatto Agent Tools MCP entry created for this Manager session. */
   mcpMount?: ManagerMcpMount;
+  /** Separate Browser MCP entry; its lifecycle is independent of memory MCP. */
+  browserMcpMount?: ManagerMcpMount;
   /** Optional diagnostic when the MCP entry could not be mounted. */
   mcpMountError?: string;
+  browserMcpMountError?: string;
 };
 
 export type ManagerMcpMount = {
@@ -75,7 +79,17 @@ export type UnifiedManagerRuntimeOptions = {
     /** Test/diagnostic override for the global config path. */
     configPath?: string;
   };
+  browser?: {
+    command: string;
+    scriptPath: string;
+    pipeName: string;
+    sessionId: string;
+    scope?: "global" | "workspace-plugin";
+    configPath?: string;
+  };
 };
+
+type McpMountOptions = NonNullable<UnifiedManagerRuntimeOptions["mcp"]>;
 
 /**
  * The unified Manager runtime deliberately contains no generated Agent
@@ -238,20 +252,40 @@ export async function ensureUnifiedManagerRuntime(workspacePath?: string, _profi
   const logPath = path.join(logDirectory, `antigravity-manager-${fingerprint}.log`);
   await mkdir(attachmentsRoot, { recursive: true });
   let mcpMount: ManagerMcpMount | undefined;
+  let browserMcpMount: ManagerMcpMount | undefined;
   let mcpMountError: string | undefined;
-  if (options?.mcp) {
+  let browserMcpMountError: string | undefined;
+  const mcpOptions = options?.mcp;
+  const browserOptions = options?.browser;
+  const allMcpOptions = [mcpOptions, browserOptions].filter((item): item is McpMountOptions => Boolean(item));
+  if (allMcpOptions.length > 0) {
     try {
       // Remove only entries that older ManagerHost versions generated in the
       // workspace. The active entry is now written to the global AGY config.
-      await cleanupLegacyWorkspaceMcp(root, options.mcp);
-      await cleanupLegacyWorkspaceMcpPlugins(root, options.mcp);
-      mcpMount = options.mcp.scope === "workspace-plugin"
-        ? await mountWorkspaceMcp(root, options.mcp)
-        : await mountGlobalMcp(options.mcp);
+      await cleanupLegacyWorkspaceMcp(root, allMcpOptions);
+      await cleanupLegacyWorkspaceMcpPlugins(root, allMcpOptions);
     } catch (error) {
       // MCP is optional. A read-only/invalid workspace config must not stop
       // the unified Antigravity session from starting.
       mcpMountError = error instanceof Error ? error.message : "无法挂载 IlMatto Agent Tools MCP。";
+    }
+    if (mcpOptions) {
+      try {
+        mcpMount = mcpOptions.scope === "workspace-plugin"
+          ? await mountWorkspaceMcp(root, mcpOptions, CURRENT_MCP_PREFIX)
+          : await mountGlobalMcp(mcpOptions, CURRENT_MCP_PREFIX);
+      } catch (error) {
+        mcpMountError = error instanceof Error ? error.message : "无法挂载 IlMatto Agent Tools MCP。";
+      }
+    }
+    if (browserOptions) {
+      try {
+        browserMcpMount = browserOptions.scope === "workspace-plugin"
+          ? await mountWorkspaceMcp(root, browserOptions, BROWSER_MCP_PREFIX)
+          : await mountGlobalMcp(browserOptions, BROWSER_MCP_PREFIX);
+      } catch (error) {
+        browserMcpMountError = error instanceof Error ? error.message : "无法挂载 IlMatto Browser MCP。";
+      }
     }
   }
   return {
@@ -266,10 +300,12 @@ export async function ensureUnifiedManagerRuntime(workspacePath?: string, _profi
     agentPath: "",
     mcpMount,
     mcpMountError,
+    browserMcpMount,
+    browserMcpMountError,
   };
 }
 
-async function cleanupLegacyWorkspaceMcp(workspacePath: string, options: NonNullable<UnifiedManagerRuntimeOptions["mcp"]>): Promise<void> {
+async function cleanupLegacyWorkspaceMcp(workspacePath: string, options: readonly McpMountOptions[]): Promise<void> {
   const configPath = path.join(workspacePath, ".agents", "mcp_config.json");
   try {
     const parsed = JSON.parse(await readFile(configPath, "utf8"));
@@ -283,7 +319,7 @@ async function cleanupLegacyWorkspaceMcp(workspacePath: string, options: NonNull
       if (!isGeneratedWorkspaceMcpName(name) || !value || typeof value !== "object" || Array.isArray(value)) continue;
       const entry = value as Record<string, unknown>;
       const args = entry.args;
-      const isGenerated = entry.command === path.resolve(options.command) && Array.isArray(args) && isKnownIlMattoMcpScript(args[0], options) && args.includes("--session-id");
+      const isGenerated = options.some((option) => entry.command === path.resolve(option.command) && Array.isArray(args) && isKnownIlMattoMcpScript(args[0], option) && args.includes("--session-id"));
       if (isGenerated) { delete remaining[name]; changed = true; }
     }
     if (!changed) return;
@@ -298,7 +334,7 @@ async function cleanupLegacyWorkspaceMcp(workspacePath: string, options: NonNull
 /** Remove stale workspace plugins created by pre-global-mount ManagerHost
  * versions. Only the exact generated plugin shape and its exact registry
  * entry are removed; user-owned plugins and modified definitions remain. */
-async function cleanupLegacyWorkspaceMcpPlugins(workspacePath: string, options: NonNullable<UnifiedManagerRuntimeOptions["mcp"]>): Promise<void> {
+async function cleanupLegacyWorkspaceMcpPlugins(workspacePath: string, options: readonly McpMountOptions[]): Promise<void> {
   const pluginsRoot = path.join(workspacePath, ".agents", "plugins");
   const registryPath = path.join(workspacePath, ".agents", "plugins.json");
   let pluginNames: string[];
@@ -312,7 +348,7 @@ async function cleanupLegacyWorkspaceMcpPlugins(workspacePath: string, options: 
       const config = JSON.parse(await readFile(path.join(pluginDirectory, "mcp_config.json"), "utf8"));
       const servers = config?.mcpServers;
       const values = servers && typeof servers === "object" && !Array.isArray(servers) ? Object.values(servers as Record<string, unknown>) : [];
-      if (manifest?.name !== pluginName || values.length !== 1 || !isIlMattoGeneratedDefinition(values[0], options)) continue;
+      if (manifest?.name !== pluginName || values.length !== 1 || !options.some((option) => isIlMattoGeneratedDefinition(values[0], option))) continue;
       await rm(pluginDirectory, { recursive: true, force: true });
       staleNames.push(pluginName);
     } catch { /* malformed or user-modified plugins are left untouched */ }
@@ -346,12 +382,12 @@ async function cleanupLegacyWorkspaceMcpPlugins(workspacePath: string, options: 
  * configuration. Every generated file is removed on shutdown only if it is
  * still equivalent to what IlMatto wrote.
  */
-async function mountWorkspaceMcp(workspacePath: string, options: NonNullable<UnifiedManagerRuntimeOptions["mcp"]>): Promise<ManagerMcpMount> {
-  if (!existsSync(options.scriptPath)) throw new Error(`找不到 IlMatto Agent Tools MCP：${options.scriptPath}`);
+async function mountWorkspaceMcp(workspacePath: string, options: McpMountOptions, namePrefix = CURRENT_MCP_PREFIX): Promise<ManagerMcpMount> {
+  if (!existsSync(options.scriptPath)) throw new Error(`找不到 MCP Server：${options.scriptPath}`);
   const agentsRoot = path.join(workspacePath, ".agents");
   const pluginsRoot = path.join(agentsRoot, "plugins");
   const sessionKey = createHash("sha256").update(`${workspacePath}\n${options.sessionId}`, "utf8").digest("hex").slice(0, 12);
-  const serverName = `${CURRENT_MCP_PREFIX}${sessionKey}`;
+  const serverName = `${namePrefix}${sessionKey}`;
   const pluginDirectory = path.join(pluginsRoot, serverName);
   const manifestPath = path.join(pluginDirectory, "plugin.json");
   const configPath = path.join(pluginDirectory, "mcp_config.json");
@@ -455,16 +491,16 @@ function escapeRegex(value: string): string {
  * the user. A session-scoped server name prevents multiple ManagerHost
  * instances from claiming the same MCP entry in the global file.
  */
-async function mountGlobalMcp(options: NonNullable<UnifiedManagerRuntimeOptions["mcp"]>): Promise<ManagerMcpMount> {
-  return withMcpConfigLock(() => mountGlobalMcpUnlocked(options));
+async function mountGlobalMcp(options: McpMountOptions, namePrefix = CURRENT_MCP_PREFIX): Promise<ManagerMcpMount> {
+  return withMcpConfigLock(() => mountGlobalMcpUnlocked(options, namePrefix));
 }
 
-async function mountGlobalMcpUnlocked(options: NonNullable<UnifiedManagerRuntimeOptions["mcp"]>): Promise<ManagerMcpMount> {
-  if (!existsSync(options.scriptPath)) throw new Error(`找不到 IlMatto Agent Tools MCP：${options.scriptPath}`);
+async function mountGlobalMcpUnlocked(options: McpMountOptions, namePrefix = CURRENT_MCP_PREFIX): Promise<ManagerMcpMount> {
+  if (!existsSync(options.scriptPath)) throw new Error(`找不到 MCP Server：${options.scriptPath}`);
   const defaultPath = path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
   const configPath = path.resolve(options.configPath ?? process.env.ILMATTO_MANAGER_MCP_CONFIG_PATH ?? defaultPath);
   const sessionKey = createHash("sha256").update(options.sessionId, "utf8").digest("hex").slice(0, 12);
-  const serverName = `${CURRENT_MCP_PREFIX}${sessionKey}`;
+  const serverName = `${namePrefix}${sessionKey}`;
   let config: Record<string, unknown> = {};
   try {
     const parsed = JSON.parse(await readFile(configPath, "utf8"));
@@ -520,6 +556,7 @@ function isKnownIlMattoMcpScript(value: unknown, options: NonNullable<UnifiedMan
   const scriptPath = path.resolve(value);
   return scriptPath === path.resolve(options.scriptPath) ||
     path.basename(scriptPath) === "agent-tools-mcp.js" ||
+    path.basename(scriptPath) === "browser-mcp.js" ||
     path.basename(scriptPath) === "codex-mcp.js";
 }
 
@@ -549,6 +586,7 @@ async function cleanupLegacyArtifacts(configuredRuntime: string, fingerprint: st
 export async function cleanupManagerRuntime(runtime: ManagerRuntime | undefined): Promise<void> {
   if (!runtime) return;
   if (runtime.mcpMount) await cleanupMcp(runtime.mcpMount);
+  if (runtime.browserMcpMount) await cleanupMcp(runtime.browserMcpMount);
   // Unified runtimes have no generated Agent/Schema files. Legacy runtimes
   // still receive narrowly-scoped cleanup for the files this module created.
   if (runtime.agentPath) try { await rm(runtime.agentPath, { force: true }); } catch { }

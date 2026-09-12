@@ -40,6 +40,7 @@ class ManagerRpcClient {
             operation,
             query: typeof args.query === "string" ? args.query : undefined,
             targetSessionId: typeof args.session_id === "string" ? args.session_id : undefined,
+            cursor: typeof args.cursor === "string" ? args.cursor : undefined,
             limit: typeof args.limit === "number" ? args.limit : undefined,
             patch: operation === "session_update" && isRecord(args.patch) ? args.patch : undefined,
             profilePatch: operation === "profile_update" && isRecord(args.patch) ? args.patch : undefined,
@@ -160,6 +161,7 @@ function companionMemoryOperation(name) {
     switch (name) {
         case "session_search": return "session_search";
         case "session_open": return "session_open";
+        case "session_read_page": return "session_read_page";
         case "session_update": return "session_update";
         case "profile_update": return "profile_update";
         default: return undefined;
@@ -170,6 +172,7 @@ function toolDefinitions() {
     return [
         { name: "session_search", description: "搜索 IlMatto 的跨会话摘要。只返回摘要和元数据，不返回原始会话；仅当用户提到过去的会话或你不确定历史细节时调用。", inputSchema: { type: "object", additionalProperties: false, required: ["query"], properties: { query: { type: "string", minLength: 1 }, limit: { type: "integer", minimum: 1, maximum: 5 } } } },
         { name: "session_open", description: "打开指定历史会话中与查询相关的少量可见消息片段。必须先用 session_search 找到该 session_id；不会返回完整会话、思路或工具输出。", inputSchema: { type: "object", additionalProperties: false, required: ["session_id", "query"], properties: { session_id: { type: "string" }, query: { type: "string", minLength: 1 } } } },
+        { name: "session_read_page", description: "按页读取当前会话或已通过 session_search 找到的历史会话中的可见对话原文。只有在摘要和相关片段不足、需要核对旧对话原话时调用；不要在普通聊天中调用。使用 cursor 继续读取，不会返回思路、工具输出或任意本地文件。", inputSchema: { type: "object", additionalProperties: false, properties: { session_id: { type: "string", description: "历史会话 ID；读取当前会话时可省略。继续分页时应保持不变。" }, cursor: { type: "string", description: "上一次响应返回的游标。" }, limit: { type: "integer", minimum: 1, maximum: 20, default: 10 } } } },
         { name: "session_update", description: "为当前会话追加事实性摘要、重要事件、未完成事项或关键词。没有跨会话价值时不要调用；每轮最多调用一次；不要写入内部思路、工具输出或未经支持的推断。", inputSchema: { type: "object", additionalProperties: false, required: ["patch"], properties: { patch: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, summaryPatch: { type: "string" }, keyEvents: { type: "array", items: { type: "string" } }, openLoops: { type: "array", items: { type: "string" } }, keywords: { type: "array", items: { type: "string" } } } } } } },
         { name: "profile_update", description: "更新全局用户画像。只保存明确事实、稳定偏好、互动边界或用户明确要求记住的内容；不要保存一次性情绪或未经支持的性格推断。", inputSchema: { type: "object", additionalProperties: false, required: ["patch"], properties: { patch: { type: "object", additionalProperties: false, required: ["section"], properties: { section: { type: "string", enum: ["basic", "interests", "preferences", "boundaries", "current_topics"] }, add: { type: "array", items: { type: "string" } }, remove: { type: "array", items: { type: "string" } } } } } } },
     ];

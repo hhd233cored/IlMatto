@@ -1,3 +1,17 @@
+export const defaultBrowserPermissions = {
+    navigate: true,
+    click: true,
+    fill: true,
+    press: true,
+    scroll: true,
+    screenshot: true,
+    // File transfer, arbitrary script execution, and coordinate input remain
+    // opt-in because they can expose local data or bypass element-level refs.
+    upload: false,
+    download: false,
+    evaluate: false,
+    coordinate: false,
+};
 export const codeResultSchema = {
     type: "object",
     additionalProperties: false,
@@ -43,6 +57,8 @@ export function isManagerClientMessage(value) {
             if (message.conversationHistory !== undefined &&
                 (!Array.isArray(message.conversationHistory) || !message.conversationHistory.every(isCompanionHistoryItem)))
                 return false;
+            if (message.browserPermissions !== undefined && !isBrowserPermissions(message.browserPermissions))
+                return false;
             return Boolean(message.antigravity) || Boolean(message.mainAgent && message.codingAgent) || (typeof message.baseUrl === "string" && typeof message.modelId === "string");
         case "activate_manager_session":
             return session;
@@ -55,6 +71,13 @@ export function isManagerClientMessage(value) {
                 (message.generateTitle === undefined || typeof message.generateTitle === "boolean");
         }
         case "approve_coding_tool": return session && typeof message.callId === "string" && typeof message.approved === "boolean";
+        case "browser_request": return isBrowserRequest(message, session);
+        case "browser_start":
+        case "browser_stop":
+        case "browser_human_done": return session;
+        case "browser_set_visibility": return session && typeof message.visible === "boolean";
+        case "browser_approve_action": return session && typeof message.actionId === "string" && message.actionId.length > 0 && typeof message.approved === "boolean";
+        case "browser_permissions_update": return session && isBrowserPermissions(message.browserPermissions);
         case "companion_memory_request":
             return isCompanionMemoryRequest(message, session);
         case "cancel_manager_turn": return session && (message.target === undefined || message.target === "antigravity" || message.target === "all");
@@ -64,6 +87,64 @@ export function isManagerClientMessage(value) {
         case "shutdown": return message.sessionId === undefined || typeof message.sessionId === "string";
         default: return false;
     }
+}
+function isBrowserRequest(value, session) {
+    if (!session || typeof value.requestId !== "string" || value.requestId.length === 0 || !isBrowserMcpOperation(value.operation))
+        return false;
+    if (value.url !== undefined && typeof value.url !== "string")
+        return false;
+    if (value.operation === "navigate" && (typeof value.url !== "string" || !/^https?:\/\//i.test(value.url.trim())))
+        return false;
+    if (value.ref !== undefined && typeof value.ref !== "string")
+        return false;
+    if (value.text !== undefined && typeof value.text !== "string")
+        return false;
+    if (value.key !== undefined && typeof value.key !== "string")
+        return false;
+    if (value.direction !== undefined && !["up", "down", "left", "right"].includes(String(value.direction)))
+        return false;
+    if (value.amount !== undefined && (typeof value.amount !== "number" || !Number.isFinite(value.amount)))
+        return false;
+    if (value.visible !== undefined && typeof value.visible !== "boolean")
+        return false;
+    if (value.actionId !== undefined && typeof value.actionId !== "string")
+        return false;
+    if (value.approved !== undefined && typeof value.approved !== "boolean")
+        return false;
+    if (value.details !== undefined && typeof value.details !== "string")
+        return false;
+    if (value.permission !== undefined && !isBrowserPermissionName(value.permission))
+        return false;
+    if (value.path !== undefined && typeof value.path !== "string")
+        return false;
+    if (value.expression !== undefined && typeof value.expression !== "string")
+        return false;
+    if (value.x !== undefined && (typeof value.x !== "number" || !Number.isFinite(value.x)))
+        return false;
+    if (value.y !== undefined && (typeof value.y !== "number" || !Number.isFinite(value.y)))
+        return false;
+    if (value.action !== undefined && typeof value.action !== "string")
+        return false;
+    if (value.button !== undefined && !["left", "right", "middle"].includes(String(value.button)))
+        return false;
+    if (value.write !== undefined && typeof value.write !== "boolean")
+        return false;
+    if (value.page !== undefined && (!value.page || typeof value.page !== "object" || Array.isArray(value.page)))
+        return false;
+    return true;
+}
+function isBrowserMcpOperation(value) {
+    return ["start", "stop", "state", "tabs", "navigate", "snapshot", "click", "fill", "press", "scroll", "screenshot", "upload", "download", "evaluate", "mouse", "keyboard", "authorize", "page_state"].includes(String(value));
+}
+function isBrowserPermissions(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        return false;
+    return Object.entries(value).every(([key, item]) => isBrowserPermissionName(key) && typeof item === "boolean");
+}
+function isBrowserPermissionName(value) {
+    return value === "navigate" || value === "click" || value === "fill" || value === "press" ||
+        value === "scroll" || value === "screenshot" || value === "upload" || value === "download" ||
+        value === "evaluate" || value === "coordinate";
 }
 export function isCompanionProfile(value) {
     if (!value || typeof value !== "object")
@@ -76,13 +157,16 @@ export function isCompanionProfile(value) {
 }
 function isCompanionMemoryRequest(value, session) {
     if (!session || typeof value.requestId !== "string" || !value.requestId ||
-        !["session_search", "session_open", "session_update", "profile_update"].includes(String(value.operation)))
+        !["session_search", "session_open", "session_read_page", "session_update", "profile_update"].includes(String(value.operation)))
         return false;
+    const operation = String(value.operation);
     if (value.query !== undefined && typeof value.query !== "string")
         return false;
     if (value.targetSessionId !== undefined && typeof value.targetSessionId !== "string")
         return false;
-    if (value.limit !== undefined && (typeof value.limit !== "number" || !Number.isInteger(value.limit) || value.limit < 1 || value.limit > 5))
+    if (value.cursor !== undefined && typeof value.cursor !== "string")
+        return false;
+    if (value.limit !== undefined && (typeof value.limit !== "number" || !Number.isInteger(value.limit) || value.limit < 1 || value.limit > (operation === "session_read_page" ? 20 : 5)))
         return false;
     if (value.patch !== undefined && !isSessionSummaryPatch(value.patch))
         return false;

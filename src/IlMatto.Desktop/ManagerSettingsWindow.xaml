@@ -157,6 +157,23 @@
             </Grid>
             <CheckBox x:Name="SafeCommandsBox" Content="Pi：自动批准安全命令" Margin="0,3"/>
             <CheckBox x:Name="GitOperationsBox" Content="Pi：自动执行本地 Git 操作" Margin="0,6,0,0"/>
+            <GroupBox Header="Browser MCP 权限" Padding="12" Margin="0,18,0,0">
+              <StackPanel>
+                <TextBlock Text="勾选后 Browser MCP 可直接使用对应能力；导航、点击、填写和按键默认允许。上传、下载、任意脚本与坐标输入默认关闭，开启前请确认页面和文件风险。" Foreground="#805B12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                <UniformGrid Columns="2">
+                  <CheckBox x:Name="BrowserNavigateBox" Content="允许页面导航" Margin="0,4,12,4"/>
+                  <CheckBox x:Name="BrowserClickBox" Content="允许元素点击" Margin="0,4,12,4"/>
+                  <CheckBox x:Name="BrowserFillBox" Content="允许填写输入框" Margin="0,4,12,4"/>
+                  <CheckBox x:Name="BrowserPressBox" Content="允许元素按键" Margin="0,4,12,4"/>
+                  <CheckBox x:Name="BrowserScrollBox" Content="允许页面滚动" Margin="0,4,12,4"/>
+                  <CheckBox x:Name="BrowserScreenshotBox" Content="允许页面截图" Margin="0,4,12,4"/>
+                  <CheckBox x:Name="BrowserUploadBox" Content="允许文件上传（高风险）" Margin="0,4,12,4"/>
+                  <CheckBox x:Name="BrowserDownloadBox" Content="允许文件下载（高风险）" Margin="0,4,12,4"/>
+                  <CheckBox x:Name="BrowserEvaluateBox" Content="允许任意 JavaScript / evaluate（高风险）" Margin="0,4,12,4"/>
+                  <CheckBox x:Name="BrowserCoordinateBox" Content="允许坐标级鼠标键盘（高风险）" Margin="0,4,12,4"/>
+                </UniformGrid>
+              </StackPanel>
+            </GroupBox>
             <TextBlock Text="Antigravity 编码执行权限" FontWeight="SemiBold" Margin="0,16,0,0"/>
             <ComboBox x:Name="AgyExecutionPolicyBox" Margin="0,6,0,0">
               <ComboBoxItem Content="逐项审批" Tag="approval"/>

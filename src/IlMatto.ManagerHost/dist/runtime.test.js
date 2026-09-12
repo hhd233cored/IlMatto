@@ -129,6 +129,36 @@ test("unified runtime mounts the Agent Tools MCP in the global Antigravity confi
         await rm(runtimeRoot, { recursive: true, force: true });
     }
 });
+test("unified runtime mounts Agent Tools and Browser MCP as separate generated servers", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-browser-mcp-workspace-"));
+    const runtimeRoot = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-browser-mcp-runtime-"));
+    const globalConfigPath = path.join(runtimeRoot, "mcp_config.json");
+    const agentScript = path.join(runtimeRoot, "agent-tools-mcp.js");
+    const browserScript = path.join(runtimeRoot, "browser-mcp.js");
+    try {
+        await writeFile(agentScript, "", "utf8");
+        await writeFile(browserScript, "", "utf8");
+        const runtime = await ensureUnifiedManagerRuntime(workspace, undefined, {
+            mcp: { command: process.execPath, scriptPath: agentScript, pipeName: "manager-pipe", sessionId: "browser-session", configPath: globalConfigPath },
+            browser: { command: process.execPath, scriptPath: browserScript, pipeName: "manager-pipe", sessionId: "browser-session", configPath: globalConfigPath },
+        });
+        assert.ok(runtime.mcpMount);
+        assert.ok(runtime.browserMcpMount);
+        assert.match(runtime.mcpMount.serverName, /^ilmatto-agent-tools-[a-f0-9]{12}$/);
+        assert.match(runtime.browserMcpMount.serverName, /^ilmatto-browser-[a-f0-9]{12}$/);
+        const mounted = JSON.parse(await readFile(globalConfigPath, "utf8"));
+        assert.ok(mounted.mcpServers[runtime.mcpMount.serverName]);
+        assert.ok(mounted.mcpServers[runtime.browserMcpMount.serverName]);
+        assert.deepEqual(mounted.mcpServers[runtime.browserMcpMount.serverName].args.slice(-4), ["--pipe", "manager-pipe", "--session-id", "browser-session"]);
+        await cleanupManagerRuntime(runtime);
+        const cleaned = JSON.parse(await readFile(globalConfigPath, "utf8").catch(() => "{}"));
+        assert.deepEqual(cleaned.mcpServers ?? {}, {});
+    }
+    finally {
+        await rm(workspace, { recursive: true, force: true });
+        await rm(runtimeRoot, { recursive: true, force: true });
+    }
+});
 test("global Agent Tools mount removes only a generated legacy Codex entry", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-legacy-global-workspace-"));
     const runtimeRoot = await mkdtemp(path.join(os.tmpdir(), "ilmatto-unified-legacy-global-runtime-"));

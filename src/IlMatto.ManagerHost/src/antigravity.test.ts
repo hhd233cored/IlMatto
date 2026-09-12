@@ -189,7 +189,7 @@ test("one live stream-json process handles consecutive turns without restarting"
   }
 });
 
-test("a failed AGY conversation resume falls back to persisted history once", async () => {
+test("a failed AGY conversation resume restarts once without injecting persisted history", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ilmatto-antigravity-resume-"));
   const runtime = { root, schemaPath: path.join(root, "schema.json"), logPath: path.join(root, "agy.log"), agentName: "ilmatto-manager-test" } as ManagerRuntime;
   const failedResume = new ScriptedAntigravityProcess((instance) => {
@@ -214,8 +214,8 @@ test("a failed AGY conversation resume falls back to persisted history once", as
     assert.equal(launches.length, 2);
     assert.deepEqual(launches[0].slice(-2), ["--conversation", "saved-conversation"]);
     assert.equal(launches[1].includes("--conversation"), false);
-    assert.match(recovered.prompts[0], /<saved_conversation_history>/);
-    assert.match(recovered.prompts[0], /之前我们讨论过会话恢复/);
+    assert.doesNotMatch(recovered.prompts[0], /<saved_conversation_history>/);
+    assert.doesNotMatch(recovered.prompts[0], /之前我们讨论过会话恢复/);
     assert.match(recovered.prompts[0], /继续当前任务/);
 
     // A recovery transcript is one-shot: the next turn uses the live fresh
@@ -230,7 +230,8 @@ test("a failed AGY conversation resume falls back to persisted history once", as
     assert.match(log, /"conversationId":"saved-conversation"/);
     assert.match(log, /"resumedConversation":false/);
     assert.match(log, /"historyMessageCount":2/);
-    assert.match(log, /history_fallback_injected/);
+    assert.match(log, /conversation_restarted_without_history/);
+    assert.match(log, /"historyInjected":false/);
   } finally {
     session.dispose();
     await rm(root, { recursive: true, force: true });
@@ -298,6 +299,31 @@ test("unified text mode accepts nested AGY response text", async () => {
   try {
     const turn = await session.ask("返回文本");
     assert.equal(turn.text, "嵌套文本");
+  } finally {
+    session.dispose();
+  }
+});
+
+test("Antigravity bootstrap is sent once per process and re-sent after a restart", async () => {
+  const processes: ScriptedAntigravityProcess[] = [];
+  const first = new ScriptedAntigravityProcess((instance, _prompt, turn) => {
+    instance.emitInit();
+    instance.emitResult({ status: "SUCCESS", response: `reply-${turn}` });
+    if (turn === 2) instance.exitCleanly();
+  });
+  const second = new ScriptedAntigravityProcess((instance) => {
+    instance.emitInit();
+    instance.emitResult({ status: "SUCCESS", response: "reply-3" });
+  });
+  processes.push(first, second);
+  const session = new AntigravitySession("agy", testRuntime(), 2, "medium", undefined, undefined, (() => processes.shift()!) as any, "bootstrap-test", false);
+  try {
+    await session.ask("one", undefined, [], "BOOTSTRAP");
+    await session.ask("two", undefined, [], "BOOTSTRAP");
+    await session.ask("three", undefined, [], "BOOTSTRAP");
+    assert.match(first.prompts[0], /BOOTSTRAP/);
+    assert.doesNotMatch(first.prompts[1], /BOOTSTRAP/);
+    assert.match(second.prompts[0], /BOOTSTRAP/);
   } finally {
     session.dispose();
   }

@@ -42,6 +42,16 @@ public partial class ManagerSettingsWindow : Window
         WorkspaceBox.Text = viewModel.WorkspacePath;
         SafeCommandsBox.IsChecked = viewModel.AutoApproveSafeCommands;
         GitOperationsBox.IsChecked = viewModel.AutoApproveGitOperations;
+        BrowserNavigateBox.IsChecked = viewModel.BrowserPermissions.Navigate;
+        BrowserClickBox.IsChecked = viewModel.BrowserPermissions.Click;
+        BrowserFillBox.IsChecked = viewModel.BrowserPermissions.Fill;
+        BrowserPressBox.IsChecked = viewModel.BrowserPermissions.Press;
+        BrowserScrollBox.IsChecked = viewModel.BrowserPermissions.Scroll;
+        BrowserScreenshotBox.IsChecked = viewModel.BrowserPermissions.Screenshot;
+        BrowserUploadBox.IsChecked = viewModel.BrowserPermissions.Upload;
+        BrowserDownloadBox.IsChecked = viewModel.BrowserPermissions.Download;
+        BrowserEvaluateBox.IsChecked = viewModel.BrowserPermissions.Evaluate;
+        BrowserCoordinateBox.IsChecked = viewModel.BrowserPermissions.Coordinate;
         SelectTaggedItem(AgyExecutionPolicyBox, viewModel.AntigravityExecutionPolicy);
         AgyStatusText.Text = "Manager 使用全局 Antigravity CLI、模型和推理强度；模型回合不设应用层超时。点击“刷新 CLI 模型”检查可用模型。";
     }
@@ -148,6 +158,19 @@ public partial class ManagerSettingsWindow : Window
             WorkspacePath = Path.GetFullPath(WorkspaceBox.Text.Trim()),
             AutoApproveSafeCommands = SafeCommandsBox.IsChecked == true,
             AutoApproveGitOperations = GitOperationsBox.IsChecked == true,
+            BrowserPermissions = new BrowserPermissionSettings
+            {
+                Navigate = BrowserNavigateBox.IsChecked == true,
+                Click = BrowserClickBox.IsChecked == true,
+                Fill = BrowserFillBox.IsChecked == true,
+                Press = BrowserPressBox.IsChecked == true,
+                Scroll = BrowserScrollBox.IsChecked == true,
+                Screenshot = BrowserScreenshotBox.IsChecked == true,
+                Upload = BrowserUploadBox.IsChecked == true,
+                Download = BrowserDownloadBox.IsChecked == true,
+                Evaluate = BrowserEvaluateBox.IsChecked == true,
+                Coordinate = BrowserCoordinateBox.IsChecked == true,
+            },
             AntigravityCliPath = AgyPathBox.Text.Trim(),
             AntigravityModel = NormalizeAgyModelId(AgyModelBox.Text),
             AntigravityEffort = SelectedText(AgyEffortBox, "medium"),

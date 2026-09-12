@@ -47,7 +47,61 @@ export type ProfilePatch = {
   remove?: string[];
 };
 
-export type CompanionMemoryOperation = "session_search" | "session_open" | "session_update" | "profile_update";
+export type CompanionMemoryOperation = "session_search" | "session_open" | "session_read_page" | "session_update" | "profile_update";
+
+/** Browser MCP operations. Higher-risk operations are independently gated by
+ * the per-session permissions below; extensions are never exposed. */
+export type BrowserMcpOperation =
+  | "start" | "stop" | "state" | "tabs" | "navigate" | "snapshot"
+  | "click" | "fill" | "press" | "scroll" | "screenshot"
+  | "upload" | "download" | "evaluate" | "mouse" | "keyboard"
+  | "authorize" | "page_state";
+
+export type BrowserState = "Stopped" | "Starting" | "AgentControlled" | "WaitingForHuman" | "HumanControlled" | "Error";
+
+export type BrowserPermissionName = "navigate" | "click" | "fill" | "press" | "scroll" | "screenshot" | "upload" | "download" | "evaluate" | "coordinate";
+export type BrowserPermissions = Partial<Record<BrowserPermissionName, boolean>>;
+
+export const defaultBrowserPermissions: Record<BrowserPermissionName, boolean> = {
+  navigate: true,
+  click: true,
+  fill: true,
+  press: true,
+  scroll: true,
+  screenshot: true,
+  // File transfer, arbitrary script execution, and coordinate input remain
+  // opt-in because they can expose local data or bypass element-level refs.
+  upload: false,
+  download: false,
+  evaluate: false,
+  coordinate: false,
+};
+
+export type BrowserRequest = {
+  type: "browser_request";
+  sessionId: string;
+  requestId: string;
+  operation: BrowserMcpOperation;
+  url?: string;
+  ref?: string;
+  text?: string;
+  key?: string;
+  direction?: "up" | "down" | "left" | "right";
+  amount?: number;
+  visible?: boolean;
+  actionId?: string;
+  approved?: boolean;
+  details?: string;
+  permission?: BrowserPermissionName;
+  path?: string;
+  expression?: string;
+  x?: number;
+  y?: number;
+  action?: string;
+  button?: "left" | "right" | "middle";
+  write?: boolean;
+  page?: { url?: string; title?: string; text?: string };
+};
 
 export type CompanionMemoryRequest = {
   type: "companion_memory_request";
@@ -56,6 +110,7 @@ export type CompanionMemoryRequest = {
   operation: CompanionMemoryOperation;
   query?: string;
   targetSessionId?: string;
+  cursor?: string;
   limit?: number;
   patch?: SessionSummaryPatch;
   profilePatch?: ProfilePatch;
@@ -162,7 +217,7 @@ export type ManagerClientMessage =
       /** Unified v2 shape. `mainAgent`/`codingAgent` remain accepted for old desktop builds. */
       antigravity?: { provider?: "antigravity"; executable?: string; conversationId?: string; model?: string; effort?: "low" | "medium" | "high"; toolPermission?: AntigravityToolPermission; terminalSandbox?: boolean };
       mainAgent?: MainAgentConfig; codingAgent?: CodingAgentConfig; executorProfiles?: ExecutorProfiles; awaitingCodingDecision?: boolean;
-      companionProfile?: CompanionProfile; conversationHistory?: CompanionHistoryItem[];
+      companionProfile?: CompanionProfile; conversationHistory?: CompanionHistoryItem[]; browserPermissions?: BrowserPermissions;
       agyPath?: string; agyConversationId?: string; piSessionFile?: string; awaitingPiDecision?: boolean;
       baseUrl?: string; modelId?: string; apiKey?: string; autoApproveSafeCommands?: boolean; autoApproveGitOperations?: boolean;
       agyModel?: string; effort?: "low" | "medium" | "high"; timeoutSeconds?: number;
@@ -170,6 +225,13 @@ export type ManagerClientMessage =
   | { type: "activate_manager_session"; sessionId: string }
   | { type: "send_manager_message"; sessionId: string; text: string; executor?: CodingProvider; attachments?: ManagerImageAttachment[]; generateTitle?: boolean }
   | { type: "approve_coding_tool"; sessionId: string; callId: string; approved: boolean }
+  | BrowserRequest
+  | { type: "browser_start"; sessionId: string }
+  | { type: "browser_stop"; sessionId: string }
+  | { type: "browser_set_visibility"; sessionId: string; visible: boolean }
+  | { type: "browser_human_done"; sessionId: string }
+  | { type: "browser_approve_action"; sessionId: string; actionId: string; approved: boolean }
+  | { type: "browser_permissions_update"; sessionId: string; browserPermissions: BrowserPermissions }
   | CompanionMemoryRequest
   | { type: "cancel_manager_turn"; sessionId: string; target?: "antigravity" | "all" }
   | { type: "request_verification"; sessionId: string; taskId: string }
@@ -194,6 +256,9 @@ export type ManagerHostMessage =
   | { type: "coding_thinking_delta"; sessionId: string; taskId?: string; source: CodingProvider; text: string }
   | { type: "coding_tool_approval_request"; sessionId: string; callId: string; tool: string; summary: string; details: string; diff?: string }
   | { type: "companion_memory_response"; sessionId: string; requestId: string; ok: boolean; data?: unknown; error?: { code: string; message: string } }
+  | { type: "browser_action_result"; sessionId: string; requestId?: string; ok: boolean; data?: unknown; error?: { code: string; message: string } }
+  | { type: "browser_state"; sessionId: string; state: BrowserState; ownerSessionId?: string; profilePath?: string; cdpEndpoint?: string; visible?: boolean; message?: string }
+  | { type: "browser_approval_request"; sessionId: string; actionId: string; tool: string; summary: string; details: string }
   | { type: "coding_tool_started"; sessionId: string; callId: string; tool: string; command?: string; taskId?: string; source?: CodingProvider }
   | { type: "coding_tool_output"; sessionId: string; callId: string; tool: string; text: string; taskId?: string; source?: CodingProvider }
   | { type: "coding_tool_completed"; sessionId: string; callId: string; tool: string; ok: boolean; summary: string; command?: string; output?: string; diff?: string; autoApproved?: boolean; taskId?: string; source?: CodingProvider }
@@ -220,6 +285,7 @@ export function isManagerClientMessage(value: unknown): value is ManagerClientMe
       if (message.companionProfile !== undefined && !isCompanionProfile(message.companionProfile)) return false;
       if (message.conversationHistory !== undefined &&
           (!Array.isArray(message.conversationHistory) || !message.conversationHistory.every(isCompanionHistoryItem))) return false;
+      if (message.browserPermissions !== undefined && !isBrowserPermissions(message.browserPermissions)) return false;
       return Boolean(message.antigravity) || Boolean(message.mainAgent && message.codingAgent) || (typeof message.baseUrl === "string" && typeof message.modelId === "string");
     case "activate_manager_session":
       return session;
@@ -232,6 +298,13 @@ export function isManagerClientMessage(value: unknown): value is ManagerClientMe
         (message.generateTitle === undefined || typeof message.generateTitle === "boolean");
     }
     case "approve_coding_tool": return session && typeof message.callId === "string" && typeof message.approved === "boolean";
+    case "browser_request": return isBrowserRequest(message, session);
+    case "browser_start":
+    case "browser_stop":
+    case "browser_human_done": return session;
+    case "browser_set_visibility": return session && typeof message.visible === "boolean";
+    case "browser_approve_action": return session && typeof message.actionId === "string" && message.actionId.length > 0 && typeof message.approved === "boolean";
+    case "browser_permissions_update": return session && isBrowserPermissions(message.browserPermissions);
     case "companion_memory_request":
       return isCompanionMemoryRequest(message, session);
     case "cancel_manager_turn": return session && (message.target === undefined || message.target === "antigravity" || message.target === "all");
@@ -241,6 +314,46 @@ export function isManagerClientMessage(value: unknown): value is ManagerClientMe
     case "shutdown": return message.sessionId === undefined || typeof message.sessionId === "string";
     default: return false;
   }
+}
+
+function isBrowserRequest(value: Record<string, unknown>, session: boolean): value is BrowserRequest {
+  if (!session || typeof value.requestId !== "string" || value.requestId.length === 0 || !isBrowserMcpOperation(value.operation)) return false;
+  if (value.url !== undefined && typeof value.url !== "string") return false;
+  if (value.operation === "navigate" && (typeof value.url !== "string" || !/^https?:\/\//i.test(value.url.trim()))) return false;
+  if (value.ref !== undefined && typeof value.ref !== "string") return false;
+  if (value.text !== undefined && typeof value.text !== "string") return false;
+  if (value.key !== undefined && typeof value.key !== "string") return false;
+  if (value.direction !== undefined && !["up", "down", "left", "right"].includes(String(value.direction))) return false;
+  if (value.amount !== undefined && (typeof value.amount !== "number" || !Number.isFinite(value.amount))) return false;
+  if (value.visible !== undefined && typeof value.visible !== "boolean") return false;
+  if (value.actionId !== undefined && typeof value.actionId !== "string") return false;
+  if (value.approved !== undefined && typeof value.approved !== "boolean") return false;
+  if (value.details !== undefined && typeof value.details !== "string") return false;
+  if (value.permission !== undefined && !isBrowserPermissionName(value.permission)) return false;
+  if (value.path !== undefined && typeof value.path !== "string") return false;
+  if (value.expression !== undefined && typeof value.expression !== "string") return false;
+  if (value.x !== undefined && (typeof value.x !== "number" || !Number.isFinite(value.x))) return false;
+  if (value.y !== undefined && (typeof value.y !== "number" || !Number.isFinite(value.y))) return false;
+  if (value.action !== undefined && typeof value.action !== "string") return false;
+  if (value.button !== undefined && !["left", "right", "middle"].includes(String(value.button))) return false;
+  if (value.write !== undefined && typeof value.write !== "boolean") return false;
+  if (value.page !== undefined && (!value.page || typeof value.page !== "object" || Array.isArray(value.page))) return false;
+  return true;
+}
+
+function isBrowserMcpOperation(value: unknown): value is BrowserMcpOperation {
+  return ["start", "stop", "state", "tabs", "navigate", "snapshot", "click", "fill", "press", "scroll", "screenshot", "upload", "download", "evaluate", "mouse", "keyboard", "authorize", "page_state"].includes(String(value));
+}
+
+function isBrowserPermissions(value: unknown): value is BrowserPermissions {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.entries(value as Record<string, unknown>).every(([key, item]) => isBrowserPermissionName(key) && typeof item === "boolean");
+}
+
+function isBrowserPermissionName(value: unknown): value is BrowserPermissionName {
+  return value === "navigate" || value === "click" || value === "fill" || value === "press" ||
+    value === "scroll" || value === "screenshot" || value === "upload" || value === "download" ||
+    value === "evaluate" || value === "coordinate";
 }
 
 export function isCompanionProfile(value: unknown): value is CompanionProfile {
@@ -254,10 +367,12 @@ export function isCompanionProfile(value: unknown): value is CompanionProfile {
 
 function isCompanionMemoryRequest(value: Record<string, unknown>, session: boolean): value is CompanionMemoryRequest {
   if (!session || typeof value.requestId !== "string" || !value.requestId ||
-      !["session_search", "session_open", "session_update", "profile_update"].includes(String(value.operation))) return false;
+      !["session_search", "session_open", "session_read_page", "session_update", "profile_update"].includes(String(value.operation))) return false;
+  const operation = String(value.operation);
   if (value.query !== undefined && typeof value.query !== "string") return false;
   if (value.targetSessionId !== undefined && typeof value.targetSessionId !== "string") return false;
-  if (value.limit !== undefined && (typeof value.limit !== "number" || !Number.isInteger(value.limit) || value.limit < 1 || value.limit > 5)) return false;
+  if (value.cursor !== undefined && typeof value.cursor !== "string") return false;
+  if (value.limit !== undefined && (typeof value.limit !== "number" || !Number.isInteger(value.limit) || value.limit < 1 || value.limit > (operation === "session_read_page" ? 20 : 5))) return false;
   if (value.patch !== undefined && !isSessionSummaryPatch(value.patch)) return false;
   if (value.profilePatch !== undefined && !isProfilePatch(value.profilePatch)) return false;
   return true;
