@@ -1,11 +1,29 @@
 **/bin/
 **/obj/
-src/IlMatto.AgentHost/node_modules/
-src/IlMatto.AgentHost/dist/
+
+# Node / TypeScript dependencies and generated JavaScript
+**/node_modules/
+**/dist/
+
+# IDE and local runtime caches
 src/IlMatto.Desktop/artifacts/
 .vs/
 .idea/
 *.user
 *.suo
+.cache/
+.dotnet-home/
 .nuget-scratch/
 .nuget-packages/
+
+# Local test workspace and build/verification/package artifacts
+agy-test-workspace/
+/artifacts/
+
+# Python bytecode
+**/__pycache__/
+*.py[cod]
+
+# Common test output
+TestResults/
+coverage/

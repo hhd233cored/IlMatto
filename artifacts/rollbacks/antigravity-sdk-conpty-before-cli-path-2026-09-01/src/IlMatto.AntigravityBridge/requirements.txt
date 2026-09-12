@@ -1,3 +1,0 @@
-# Pin this dependency in release packaging. The SDK wheel contains the
-# platform-specific Antigravity runtime required by bridge.py.
-google-antigravity==0.1.15
