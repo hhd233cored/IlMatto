@@ -130,6 +130,34 @@ internal static class TimelineRegressionChecks
         Require(count == beforeDetach, "A detached presenter published a stale measurement");
     }
 
+    internal static async Task EmojiBubbleWidth()
+    {
+        using var fixture = new TimelineFixture();
+        var entries = new ObservableCollection<ManagerChatEntry>
+        {
+            new("你", "user", "带表情🙂") { IsStreamingText = true },
+            new("Agent", "antigravity", "😄🥰") { IsStreamingText = true },
+            new("你", "user", "☺️") { IsStreamingText = true },
+            new("Agent", "antigravity", "不带表情") { IsStreamingText = true }
+        };
+        fixture.Controller.SetEntries(entries);
+        entries[0].IsStreamingText = false;
+        entries[1].IsStreamingText = false;
+        await fixture.Settle();
+
+        var bubbles = Descendants<Border>(fixture.List)
+            .Where(border => border.Visibility == Visibility.Visible &&
+                             border.CornerRadius.TopLeft == 15 && border.ActualHeight >= 24)
+            .ToArray();
+        Require(bubbles.Length == entries.Count, $"Expected {entries.Count} realized chat bubbles, found {bubbles.Length}");
+        foreach (var bubble in bubbles)
+            Require(bubble.ActualWidth < fixture.List.ActualWidth * 0.5,
+                $"Short chat bubble was stretched to {bubble.ActualWidth:F1}px");
+        foreach (var bubble in bubbles.Take(3))
+            Require(bubble.ActualHeight < 52,
+                $"Short emoji message wrapped unexpectedly at {bubble.ActualHeight:F1}px");
+    }
+
     internal static Task IndexConsistency()
     {
         var cache = new ChatMessageLayoutCache();
@@ -178,6 +206,7 @@ internal static class TimelineRegressionChecks
         internal readonly ObservableCollection<object> Items = new();
         internal ChatTimelineController Controller { get; }
         internal ScrollViewer Scroll { get; }
+        internal ListBox List => _list;
 
         internal TimelineFixture()
         {

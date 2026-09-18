@@ -79,6 +79,11 @@ internal sealed class ChatMessageLayoutCache
         if (entry.IsTransientStatus)
             return 40 + (entry.ShowDateSeparator ? 38 : 0);
 
+        // A pending Agent row contains metadata only; reserve the header
+        // footprint but do not estimate an empty message body.
+        if (entry.IsPendingAgent)
+            return 54 + (entry.ShowDateSeparator ? 48 : 0);
+
         // Deliberately slightly high: a row shrinking once after its first
         // natural measure is less disruptive than a collapsed row expanding
         // while the user is moving a scrollbar thumb.

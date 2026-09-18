@@ -6,6 +6,7 @@ IlMatto 是一个运行在开发机上的双层 WPF Agent。Manager 会话现在
 
 - [项目结构文档](docs/project-structure.md)
 - [功能文档](docs/functional-specification.md)
+- [打包与发布指南](docs/packaging.md)
 - [陪伴型 RP 后续路线图](docs/companion-roadmap.md)
 - [项目上下文与术语](CONTEXT.md)
 

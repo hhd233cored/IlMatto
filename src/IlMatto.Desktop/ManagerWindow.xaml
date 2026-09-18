@@ -237,7 +237,18 @@
                 RenderContent="{Binding RenderContent}"
                 FullContentTemplate="{DynamicResource ChatTimelineFullContentTemplate}"
                 PlaceholderTemplate="{DynamicResource ChatTimelineSkeletonTemplate}"
-                NaturalHeightMeasured="ChatTimelinePresenter_OnNaturalHeightMeasured"/>
+                NaturalHeightMeasured="ChatTimelinePresenter_OnNaturalHeightMeasured">
+              <local:ReservedMessagePresenter.Style>
+                <Style TargetType="local:ReservedMessagePresenter">
+                  <Setter Property="Visibility" Value="Visible"/>
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding Entry.IsPendingAgent}" Value="True">
+                      <Setter Property="Visibility" Value="Collapsed"/>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </local:ReservedMessagePresenter.Style>
+            </local:ReservedMessagePresenter>
           </StackPanel>
         </Grid>
       </Grid>
@@ -603,8 +614,9 @@
           <Style TargetType="Border">
             <Setter Property="Background" Value="#FFFFFF"/>
             <Setter Property="BorderBrush" Value="#E4E7EC"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
             <Style.Triggers>
-              <DataTrigger Binding="{Binding IsUser}" Value="True"><Setter Property="Background" Value="#E8F2FF"/><Setter Property="BorderBrush" Value="#C9DFF7"/></DataTrigger>
+              <DataTrigger Binding="{Binding IsUser}" Value="True"><Setter Property="Background" Value="#E8F2FF"/><Setter Property="BorderBrush" Value="#C9DFF7"/><Setter Property="HorizontalAlignment" Value="Right"/></DataTrigger>
               <DataTrigger Binding="{Binding IsTransientStatus}" Value="True"><Setter Property="Background" Value="#EEF1F5"/><Setter Property="BorderBrush" Value="#EEF1F5"/><Setter Property="BorderThickness" Value="0"/><Setter Property="CornerRadius" Value="11"/></DataTrigger>
             </Style.Triggers>
           </Style>
@@ -775,7 +787,7 @@
                   <TextBlock Text="◌" Foreground="#54708D" FontSize="14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Border>
                 <StackPanel Grid.Column="1" Margin="8,0,4,0">
-                  <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Foreground="#273244" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
+                  <local:SelectableMessageTextBox Text="{Binding Title}" FontWeight="SemiBold" Foreground="#273244" TextWrapping="NoWrap" Padding="0" BorderThickness="0" Background="Transparent" VerticalContentAlignment="Center" ToolTip="{Binding Title}"/>
                   <TextBlock Text="{Binding ListTimestamp, StringFormat={}{0:MM-dd HH:mm}}" Foreground="#8B96A5" FontSize="11" Margin="0,3,0,0"/>
                 </StackPanel>
                 <Button Grid.Column="2" Content="×" ToolTip="删除会话" Command="{Binding DataContext.DeleteConversationCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" Style="{StaticResource IconButton}" FontSize="15" Padding="5,2"/>
@@ -894,6 +906,7 @@
                       <StackPanel.Style><Style TargetType="StackPanel"><Setter Property="HorizontalAlignment" Value="Left"/><Style.Triggers><DataTrigger Binding="{Binding IsUser}" Value="True"><Setter Property="HorizontalAlignment" Value="Right"/></DataTrigger><DataTrigger Binding="{Binding IsTransientStatus}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>
                       <TextBlock Text="{Binding DisplayRole}" Foreground="#4F5965" FontSize="10.5" FontWeight="Normal" TextAlignment="Right"/>
                       <TextBlock Text="{Binding Runtime.DisplayLabel}" Foreground="#8A93A0" FontSize="10.5" Margin="10,0,0,0"/>
+                      <TextBlock Text="{Binding TimeLabel}" Foreground="#A1A8B2" FontSize="10.5" Margin="10,0,0,0"/>
                     </StackPanel>
                     <ItemsControl x:Name="MessageImages" ItemsSource="{Binding Attachments}" Visibility="{Binding HasAttachments, Converter={StaticResource BooleanToVisibilityConverter}}" HorizontalAlignment="Stretch" Margin="0,0,0,8">
                       <ItemsControl.Style>

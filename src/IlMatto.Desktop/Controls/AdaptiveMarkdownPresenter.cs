@@ -47,24 +47,42 @@ public sealed class AdaptiveMarkdownPresenter : ContentControl
     private void RefreshContent()
     {
         var markdown = Markdown ?? string.Empty;
-        var kind = DeferWhileStreaming
+        var isStreaming = DeferWhileStreaming;
+        var kind = isStreaming
             ? MarkdownPresentationKind.Plain
             : MarkdownClassifier.Classify(markdown);
 
         if (kind is MarkdownPresentationKind.Plain)
         {
             // Emoji.Wpf is intentionally reserved for actual emoji. Its color
-            // glyph substitution is valuable for 🙂, but unnecessary for the
-            // overwhelmingly common Chinese-prose path.
+            // glyph substitution is valuable for 🙂. Streaming keeps using the
+            // TextBlock path; completed messages use the selectable inline
+            // renderer so color emoji remain selectable as well.
             if (EmojiTextSupport.ContainsEmoji(markdown))
             {
+                if (!isStreaming)
+                {
+                    if (Content is InlineMarkdownTextBlock completedEmojiText)
+                    {
+                        completedEmojiText.Markdown = markdown;
+                        return;
+                    }
+
+                    Content = new InlineMarkdownTextBlock
+                    {
+                        Markdown = markdown,
+                        HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+                    };
+                    return;
+                }
+
                 if (Content is EmojiTextBlock emojiTextBlock)
                 {
                     emojiTextBlock.Text = markdown;
                     return;
                 }
 
-                Content = new EmojiTextBlock
+                var createdEmojiTextBlock = new EmojiTextBlock
                 {
                     Text = markdown,
                     ColorBlend = true,
@@ -72,20 +90,41 @@ public sealed class AdaptiveMarkdownPresenter : ContentControl
                     TextAlignment = TextAlignment.Left,
                     HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
                 };
+                createdEmojiTextBlock.ContextMenu = MessageCopyContextMenu.Create(() => createdEmojiTextBlock.Text ?? string.Empty);
+                Content = createdEmojiTextBlock;
                 return;
             }
 
-            if (Content is TextBlock textBlock && Content is not EmojiTextBlock)
+            // Keep the active streaming bubble on the cheapest visual. Once a
+            // turn finishes, replace it with the read-only TextBox so the
+            // completed prose can be selected without a FlowDocument.
+            if (isStreaming)
             {
-                textBlock.Text = markdown;
+                if (Content is TextBlock textBlock && Content is not EmojiTextBlock)
+                {
+                    textBlock.Text = markdown;
+                    return;
+                }
+
+                Content = new TextBlock
+                {
+                    Text = markdown,
+                    TextWrapping = TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Left,
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+                };
                 return;
             }
 
-            Content = new TextBlock
+            if (Content is SelectableMessageTextBox selectableTextBox)
+            {
+                selectableTextBox.Text = markdown;
+                return;
+            }
+
+            Content = new SelectableMessageTextBox
             {
                 Text = markdown,
-                TextWrapping = TextWrapping.Wrap,
-                TextAlignment = TextAlignment.Left,
                 HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
             };
             return;

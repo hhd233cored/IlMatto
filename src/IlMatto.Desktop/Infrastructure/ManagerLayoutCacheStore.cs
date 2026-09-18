@@ -13,7 +13,11 @@ namespace IlMatto.Desktop.Infrastructure;
 internal static class ManagerLayoutCacheStore
 {
     private const int MaxEntries = 10_000;
-    private const int CurrentGeometryVersion = 2;
+    // Version 3 invalidates hints captured while the chat bubble itself was
+    // arranged with HorizontalAlignment=Stretch. Short messages now retain
+    // their natural width, so those older widths would otherwise keep the
+    // placeholder shell visibly stretched until every row was remeasured.
+    private const int CurrentGeometryVersion = 3;
     private const int WidthBucketSize = 32;
     private const double GeometryEpsilon = 0.5;
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };

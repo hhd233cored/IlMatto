@@ -573,7 +573,14 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 attachment.Path, attachment.DisplayName, attachment.MimeType, "image", attachment.AttachmentId, attachment.Order)).ToList();
             await _pipe!.SendAsync(new SendManagerMessage(conversation.SessionId, text, messageAttachments, executor, generateTitle));
         }
-        catch (Exception exception) { AddSystemMessage($"无法发送：{exception.Message}"); IsBusy = false; ManagerStatus = "错误"; }
+        catch (Exception exception)
+        {
+            // The metadata-only Agent row is optimistic: if the transport or
+            // session bootstrap fails before a host event arrives, remove it
+            // instead of leaving a stale empty task in the timeline.
+            StopManagerTypewriter();
+            AddSystemMessage($"无法发送：{exception.Message}"); IsBusy = false; ManagerStatus = "错误";
+        }
     }
 
     [RelayCommand]
@@ -1052,16 +1059,30 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     private void ApplyManagerTaskTiming(ManagerHostEvent message)
     {
         var entry = _streamingManager;
-        if (entry is null || string.IsNullOrWhiteSpace(message.StartedAt)) return;
-        if (!DateTimeOffset.TryParse(message.StartedAt, out var startedAt)) return;
-        if (entry.Runtime is null || !string.Equals(entry.Runtime.TurnId, message.TurnId, StringComparison.Ordinal))
-            entry.Runtime = new TaskRuntimeInfo(null, message.TurnId, startedAt, message.State ?? "responding");
         // manager_completed is the terminal event for the visible Agent
         // answer, but its wire shape carries completedAt/durationMs instead
         // of a state field. Treating the missing state as "responding" here
         // restarted the elapsed timer exactly when the answer had finished.
         var completedEvent = message.Type == "manager_completed" && message.Final != false;
         var terminal = completedEvent || message.State is "idle" or "cancelled" or "error";
+        if (entry is null) return;
+
+        DateTimeOffset? startedAt = null;
+        if (!string.IsNullOrWhiteSpace(message.StartedAt) && DateTimeOffset.TryParse(message.StartedAt, out var parsedStartedAt))
+            startedAt = parsedStartedAt;
+        if (entry.Runtime is null)
+        {
+            // A completion/error event can omit StartedAt. In that case there
+            // is no timing row to update unless a prior state event supplied
+            // it, so leave the event for the normal text/completion cleanup.
+            if (!startedAt.HasValue) return;
+            entry.Runtime = new TaskRuntimeInfo(null, message.TurnId, startedAt.Value, message.State ?? "responding");
+        }
+        else if (startedAt.HasValue && !string.Equals(entry.Runtime.TurnId, message.TurnId, StringComparison.Ordinal))
+        {
+            entry.Runtime = new TaskRuntimeInfo(null, message.TurnId, startedAt.Value, message.State ?? "responding");
+        }
+
         if (terminal)
         {
             var ended = DateTimeOffset.TryParse(message.CompletedAt, out var completedAt) ? completedAt : DateTimeOffset.UtcNow;
@@ -1303,7 +1324,12 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 if (message.State is "responding" or "routing" or "waiting_approval") IsBusy = true;
                 else if (message.State is "idle" or "cancelled" or "error") IsBusy = false;
                 ApplyManagerTaskTiming(message);
-                if (message.State is "cancelled" or "error")
+                // A host may report idle without a separate completed event
+                // when a turn produced no visible text. Remove only the
+                // metadata-only row in that case; a text-bearing stream must
+                // remain available for a subsequent completion payload.
+                if (message.State is "cancelled" or "error" ||
+                    (message.State == "idle" && _streamingManager?.IsPendingAgent == true))
                 {
                     StopManagerTypewriter();
                     _streamingManager?.CompleteThinking();
@@ -1794,9 +1820,22 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         var source = conversation.MainAgent?.Provider == "openai_compatible" ? "api_manager" : "antigravity";
         var bubble = GetOrCreateManagerBubble(CurrentMainDisplayName, source);
         if (bubble.Entry is not null) return;
-        bubble.Entry = AddEntry(bubble.Role, bubble.Source, "");
-        bubble.Entry.IsStreamingText = true;
-        _streamingManager = bubble.Entry;
+
+        // Show only the Agent metadata immediately. The body presenter is
+        // collapsed while IsPendingAgent is true, so this is not an empty
+        // message bubble. The same entry is reused for the first text delta.
+        var entry = new ManagerChatEntry(
+            CurrentMainDisplayName,
+            source,
+            "",
+            createdAt: DateTime.Now,
+            isPendingAgent: true);
+        entry.Runtime = new TaskRuntimeInfo(null, null, DateTimeOffset.UtcNow, "responding");
+        bubble.Entry = entry;
+        AppendMessage(conversation, entry);
+        _streamingManager = entry;
+        _activeRuntimes.Track(entry.Runtime);
+        EnsureTaskDurationTimer();
     }
 
     private PendingManagerBubble GetOrCreateManagerBubble(string role, string source)
@@ -1835,10 +1874,10 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
     private void SuspendManagerBubbleForStatus()
     {
         if (_managerInputBubble is null) return;
-        // Keep the empty placeholder reserved at turn start. A reasoning/tool
-        // status can arrive before the manager's first visible text; removing
-        // that placeholder here would let an asynchronous coding bubble claim
-        // its position and put the later manager reply below it again.
+        // Once a visible manager bubble has started, keep it queued behind the
+        // transient status. A metadata-only pending row remains visible while
+        // its body stays collapsed; only a completed/text-bearing row is
+        // suspended behind the status entry.
         if (_managerInputBubble.Entry is not null && !_managerInputBubble.HasText && !_managerInputBubble.IsComplete)
             return;
         _managerInputBubble.IsComplete = true;
@@ -1929,9 +1968,10 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
                 if (bubble.Entry is null)
                 {
                     bubble.Entry = AddEntry(bubble.Role, bubble.Source, "");
-                    bubble.Entry.IsStreamingText = true;
-                    _streamingManager = bubble.Entry;
                 }
+                if (bubble.Entry.IsPendingAgent) bubble.Entry.SetPendingAgent(false);
+                bubble.Entry.IsStreamingText = true;
+                _streamingManager = bubble.Entry;
 
                 var length = NextTypewriterBatchLength(bubble.PendingText);
                 var value = bubble.PendingText.ToString(0, length);
@@ -1977,7 +2017,8 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         {
             bubble.Entry.CompleteThinking();
             bubble.Entry.IsStreamingText = false;
-            if (string.IsNullOrWhiteSpace(bubble.Entry.Text) && !bubble.Entry.HasThinking && bubble.Entry.Runtime is null)
+            if (string.IsNullOrWhiteSpace(bubble.Entry.Text) && !bubble.Entry.HasThinking &&
+                (bubble.Entry.Runtime is null || bubble.Entry.IsPendingAgent))
                 if (EventConversation is not null) RemoveMessage(EventConversation, bubble.Entry);
         }
 
@@ -1994,6 +2035,7 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
             if (bubble.PendingText.Length > 0)
             {
                 bubble.Entry ??= AddEntry(bubble.Role, bubble.Source, "");
+                if (bubble.Entry.IsPendingAgent) bubble.Entry.SetPendingAgent(false);
                 bubble.Entry.Append(bubble.PendingText.ToString());
                 bubble.PendingText.Clear();
             }
@@ -2011,10 +2053,10 @@ public partial class ManagerViewModel : ObservableObject, IAsyncDisposable
         ClearTransientManagerStatus();
         if (_streamingManager is not null)
         {
-            // Keep a task placeholder when it already has timing metadata so
-            // a later cancelled/error manager_state can attach the
+            // Keep a text-bearing task row when it already has timing metadata
+            // so a later cancelled/error manager_state can attach the
             // authoritative duration instead of losing the task bubble.
-            var preserveTaskEntry = _streamingManager.Runtime is not null;
+            var preserveTaskEntry = _streamingManager.Runtime is not null && !_streamingManager.IsPendingAgent;
             _streamingManager.CompleteThinking();
             _streamingManager.IsStreamingText = false;
             if (string.IsNullOrWhiteSpace(_streamingManager.Text) && !_streamingManager.HasThinking && !preserveTaskEntry)

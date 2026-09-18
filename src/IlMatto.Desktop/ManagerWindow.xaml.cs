@@ -345,13 +345,7 @@ public partial class ManagerWindow : Window
 
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         {
-            if (sender is System.Windows.Controls.TextBox textBox)
-            {
-                var selectionStart = textBox.SelectionStart;
-                textBox.SelectedText = Environment.NewLine;
-                textBox.CaretIndex = selectionStart + Environment.NewLine.Length;
-                textBox.SelectionLength = 0;
-            }
+            InsertInputNewLineAtCaret(sender);
             e.Handled = true;
             return;
         }
@@ -359,6 +353,65 @@ public partial class ManagerWindow : Window
         e.Handled = true;
         if (DataContext is ManagerViewModel viewModel && viewModel.SendCommand.CanExecute(null))
             viewModel.SendCommand.Execute(null);
+    }
+
+    /// <summary>
+    /// Emoji.Wpf keeps the real caret in the RichTextBox inside the outer
+    /// emoji:TextBox template. Using the outer SelectionStart can therefore
+    /// insert at its stale default value (usually zero). Edit the inner
+    /// selection first, then mirror its normalized text/caret to the outer
+    /// control and view-model.
+    /// </summary>
+    private void InsertInputNewLineAtCaret(object sender)
+    {
+        var editor = FindVisualChild<Emoji.Wpf.RichTextBox>(InputTextBox);
+        if (editor is not null)
+        {
+            try
+            {
+                var baseEditor = (System.Windows.Controls.RichTextBox)editor;
+                var selection = baseEditor.Selection;
+                selection.Text = Environment.NewLine;
+                var caret = selection.End;
+                var updatedText = editor.Text ?? string.Empty;
+
+                _synchronizingInputEditor = true;
+                try
+                {
+                    if (!string.Equals(InputTextBox.Text, updatedText, StringComparison.Ordinal))
+                        InputTextBox.Text = updatedText;
+                    if (DataContext is ManagerViewModel viewModel &&
+                        !string.Equals(viewModel.InputText, updatedText, StringComparison.Ordinal))
+                        viewModel.InputText = updatedText;
+                }
+                finally
+                {
+                    _synchronizingInputEditor = false;
+                }
+
+                editor.Focus();
+                baseEditor.Selection.Select(caret, caret);
+                baseEditor.CaretPosition = caret;
+                return;
+            }
+            catch (ArgumentException)
+            {
+                // Fall through to the outer TextBox if the template was
+                // recreated between the key event and the edit.
+            }
+            catch (InvalidOperationException)
+            {
+                // Same fallback for a detached/recreated document.
+            }
+        }
+
+        if (sender is System.Windows.Controls.TextBox textBox)
+        {
+            var selectionStart = textBox.SelectionStart;
+            textBox.SelectedText = Environment.NewLine;
+            textBox.CaretIndex = selectionStart + Environment.NewLine.Length;
+            textBox.SelectionLength = 0;
+        }
     }
 
     private void InputTextBox_OnTextChanged(object sender, TextChangedEventArgs e)

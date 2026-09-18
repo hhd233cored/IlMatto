@@ -206,7 +206,8 @@ internal sealed class ChatTimelineController : IDisposable
         if (sender is not ManagerChatEntry entry || _entries is null) return;
         if (e.PropertyName is not (nameof(ManagerChatEntry.Text) or nameof(ManagerChatEntry.IsStreamingText) or
             nameof(ManagerChatEntry.IsThinking) or nameof(ManagerChatEntry.ShowDateSeparator) or
-            nameof(ManagerChatEntry.CodeResult) or nameof(ManagerChatEntry.Runtime)))
+            nameof(ManagerChatEntry.CodeResult) or nameof(ManagerChatEntry.Runtime) or
+            nameof(ManagerChatEntry.IsPendingAgent)))
             return;
 
         _layout.Invalidate(entry, GetContentWidth());
@@ -515,7 +516,7 @@ internal sealed class ChatTimelineController : IDisposable
 
     private void QueuePersistedMeasurement(ChatTimelineMessageRow row)
     {
-        if (string.IsNullOrWhiteSpace(_sessionId) || row.Entry.IsTransientStatus ||
+        if (string.IsNullOrWhiteSpace(_sessionId) || row.Entry.IsTransientStatus || row.Entry.IsPendingAgent ||
             row.Entry.IsStreamingText || row.Entry.IsThinking || row.Index < 0)
             return;
 

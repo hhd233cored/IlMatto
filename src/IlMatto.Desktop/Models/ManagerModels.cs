@@ -135,13 +135,14 @@ public sealed class ManagerCodingAgentBinding
 
 public partial class ManagerChatEntry : ObservableObject
 {
-    public ManagerChatEntry(string role, string source, string text, DateTime? createdAt = null, IEnumerable<ManagerImageAttachment>? attachments = null, bool isTransientStatus = false)
+    public ManagerChatEntry(string role, string source, string text, DateTime? createdAt = null, IEnumerable<ManagerImageAttachment>? attachments = null, bool isTransientStatus = false, bool isPendingAgent = false)
     {
         Role = role;
         Source = source;
         Text = text;
         CreatedAt = createdAt ?? DateTime.Now;
         IsTransientStatus = isTransientStatus;
+        IsPendingAgent = isPendingAgent;
         if (attachments is not null)
             foreach (var attachment in attachments) Attachments.Add(attachment);
         if (!string.IsNullOrEmpty(text)) Segments.Add(new ChatSegment("text", text));
@@ -152,6 +153,18 @@ public partial class ManagerChatEntry : ObservableObject
     [ObservableProperty] private TaskRuntimeInfo? runtime;
     public DateTime CreatedAt { get; }
     public bool IsTransientStatus { get; }
+    /// <summary>
+    /// Runtime-only metadata row shown while an Agent turn is waiting for its
+    /// first visible response chunk. It deliberately has no persisted body.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsPendingAgent { get; private set; }
+    public void SetPendingAgent(bool value)
+    {
+        if (IsPendingAgent == value) return;
+        IsPendingAgent = value;
+        OnPropertyChanged(nameof(IsPendingAgent));
+    }
     [ObservableProperty] private bool showDateSeparator;
     public bool IsUser => Role == "你" || Source == "user";
     /// <summary>Hide the legacy provider suffix from older persisted Manager bubbles.</summary>

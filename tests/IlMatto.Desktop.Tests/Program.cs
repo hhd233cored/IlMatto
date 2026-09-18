@@ -33,6 +33,7 @@ internal static class Program
                 await Check("save requests coalesce and writes remain ordered", WriterOrdering);
                 await Check("failed saves retain the latest dirty snapshot", WriterRetry);
                 await Check("snapshots detach mutable state and old JSON still loads", SnapshotIsolation);
+                await Check("autosave omits transient and empty timeline rows", PersistedMessageFilter);
                 await Check("streamed single/mixed segments preserve text and sharing", TextSharing);
                 await Check("only active task runtimes publish elapsed updates", ActiveRuntimes);
                 await Check("background event coalescing preserves boundaries", EventBuffer);
@@ -42,6 +43,7 @@ internal static class Program
                 await Check("saving and appending retain the allocation improvements", AllocationBudgets);
                 await Check("image previews preserve aspect, alpha, DPI detail and file access", ImagePreviews);
                 await Check("preview controls load, defer and release their bitmap", PreviewLifecycle);
+                await Check("short emoji bubbles remain content-sized", () => TimelineRegressionChecks.EmojiBubbleWidth());
                 await Check("timeline geometry survives materialization and scrolling", () => TimelineRegressionChecks.Geometry(Root));
                 await Check("timeline index retains measured streaming and long-row heights", TimelineRegressionChecks.IndexConsistency);
             }
@@ -176,6 +178,35 @@ internal static class Program
         entry.Append("继续");
         Assert(entry.Text == "开头🙂\n代码结尾继续", "Combined text changed");
         Assert(entry.Segments.Count == 3 && entry.Segments[0].Text == "开头🙂\n代码" && entry.Segments[2].Text == "结尾继续", "Mixed segment order changed");
+        return Task.CompletedTask;
+    }
+
+    private static Task PersistedMessageFilter()
+    {
+        var conversation = Conversation("persist-filter");
+        conversation.Messages.Add(new ManagerChatEntry("你", "user", "带图🙂", attachments: new[]
+        {
+            new ManagerImageAttachment { Path = Path.Combine(Root, "attachment.png"), DisplayName = "attachment.png" }
+        }));
+        conversation.Messages.Add(new ManagerChatEntry("Agent", "antigravity", ""));
+        var pending = new ManagerChatEntry("Agent", "antigravity", "", isPendingAgent: true);
+        pending.Runtime = new TaskRuntimeInfo(null, null, DateTimeOffset.UtcNow, "responding");
+        Assert(pending.IsPendingAgent && !pending.HasMessageBody, "Pending Agent row exposed a message body");
+        pending.SetPendingAgent(false);
+        Assert(!pending.IsPendingAgent, "Pending Agent row could not transition to streamed content");
+        pending.SetPendingAgent(true);
+        conversation.Messages.Add(pending);
+        conversation.Messages.Add(new ManagerChatEntry("Agent", "antigravity", "正在读取图片…", isTransientStatus: true));
+        conversation.Messages.Add(new ManagerChatEntry("Agent", "antigravity", "正常回复"));
+
+        var path = Path.Combine(Root, "persist-filter.json");
+        // Use the internal overload so the test never touches the user's
+        // normal LocalAppData conversation file.
+        ManagerConversationStore.CreateSaveOperation(new[] { conversation }, path)();
+        var loaded = ManagerConversationStore.Load(path).Single();
+        Assert(loaded.Messages.Count == 2, "Transient or empty timeline rows were persisted");
+        Assert(loaded.Messages[0].Attachments.Count == 1 && loaded.Messages[0].Text == "带图🙂", "Image+emoji message was filtered or changed");
+        Assert(loaded.Messages[1].Text == "正常回复", "Normal assistant message was filtered");
         return Task.CompletedTask;
     }
 

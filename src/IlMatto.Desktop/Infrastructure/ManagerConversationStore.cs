@@ -77,6 +77,13 @@ public static class ManagerConversationStore
                 };
                 foreach (var message in snapshot.Messages ?? new())
                 {
+                    // A turn can be autosaved while the Manager is still
+                    // waiting for its first response. Such a turn may contain
+                    // an empty visual placeholder (or a segment that was
+                    // cleared during streaming). It is runtime UI state, not
+                    // conversation content, so never resurrect it on load.
+                    if (!HasPersistedMessageBody(message)) continue;
+
                     // A persisted transcript can outlive a process that was
                     // interrupted mid-turn. Never resurrect an active
                     // “正在思考” state after restart; keep the text as a
@@ -164,7 +171,7 @@ public static class ManagerConversationStore
             // in the legacy DTO below solely for one-time migration.
             CompanionProfile = new CompanionProfileSnapshot { CharacterName = item.CompanionProfile.CharacterName, CharacterPrompt = item.CompanionProfile.CharacterPrompt },
             MainAgent = Clone(item.MainAgent), CodingAgent = Clone(item.CodingAgent),
-            Messages = item.Messages.Select(message => new MessageSnapshot
+            Messages = item.Messages.Where(HasPersistedMessageBody).Select(message => new MessageSnapshot
             {
                 Role = message.Role,
                 Source = message.Source,
@@ -231,6 +238,25 @@ public static class ManagerConversationStore
         JsonSerializer.SerializeToElement(value, Options).Deserialize<T>(Options);
 
     private static string Limit(string value) => value.Length <= 64_000 ? value : value[..64_000] + "\n…（内容已截断）";
+
+    private static bool HasPersistedMessageBody(ManagerChatEntry message) =>
+        !message.IsTransientStatus && !message.IsPendingAgent &&
+        (!string.IsNullOrWhiteSpace(message.Text) ||
+         !string.IsNullOrWhiteSpace(message.ThinkingText) ||
+         message.CodeResult is not null ||
+         message.Runtime is not null ||
+         message.Attachments.Count > 0 ||
+         message.Segments.Any(segment =>
+             !string.IsNullOrEmpty(segment.Text) || segment.Operations.Count > 0));
+
+    private static bool HasPersistedMessageBody(MessageSnapshot message) =>
+        (!string.IsNullOrWhiteSpace(message.Text) ||
+         !string.IsNullOrWhiteSpace(message.ThinkingText) ||
+         message.CodeResult is not null ||
+         message.Runtime is not null ||
+         (message.Attachments?.Count > 0) ||
+         (message.Segments?.Any(segment =>
+             !string.IsNullOrEmpty(segment.Text) || (segment.Operations?.Count > 0)) == true));
 
     private static TaskRuntimeInfo? RestoreRuntime(RuntimeSnapshot? snapshot)
     {
